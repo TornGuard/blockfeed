@@ -1,0 +1,16 @@
+{
+  "name": "blockfeed",
+  "version": "0.1.0",
+  "description": "Real-time Bitcoin mempool + OPNet data API",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "pg": "^8.11.3",
+    "ws": "^8.17.1"
+  }
+}
