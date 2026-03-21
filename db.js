@@ -60,11 +60,15 @@ export async function ensureSchema() {
     );
 
     CREATE TABLE IF NOT EXISTS api_keys (
-      key        TEXT PRIMARY KEY,
-      name       TEXT NOT NULL,
-      tier       TEXT NOT NULL DEFAULT 'free',
-      created_at TIMESTAMPTZ DEFAULT NOW()
+      key           TEXT PRIMARY KEY,
+      name          TEXT NOT NULL,
+      tier          TEXT NOT NULL DEFAULT 'free',
+      request_count BIGINT NOT NULL DEFAULT 0,
+      last_used_at  TIMESTAMPTZ,
+      created_at    TIMESTAMPTZ DEFAULT NOW()
     );
+    ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS request_count BIGINT NOT NULL DEFAULT 0;
+    ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS last_used_at  TIMESTAMPTZ;
 
     CREATE INDEX IF NOT EXISTS idx_contract_events_block    ON contract_events (block_height DESC);
     CREATE INDEX IF NOT EXISTS idx_contract_events_type     ON contract_events (event_type);
@@ -312,9 +316,16 @@ export async function getApiKey(key) {
 
 export async function listApiKeys() {
   const r = await pool.query(
-    `SELECT name, tier, created_at FROM api_keys ORDER BY created_at DESC`,
+    `SELECT name, tier, request_count, last_used_at, created_at FROM api_keys ORDER BY request_count DESC`,
   );
   return r.rows;
+}
+
+export async function incrementApiKeyUsage(key) {
+  await pool.query(
+    `UPDATE api_keys SET request_count = request_count + 1, last_used_at = NOW() WHERE key = $1`,
+    [key],
+  );
 }
 
 // ── Bet activity summary (public, no wallet data)

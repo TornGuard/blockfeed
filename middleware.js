@@ -13,14 +13,14 @@
  *   X-RateLimit-Reset     Unix timestamp (seconds) when window resets
  */
 
-import { getApiKey } from './db.js';
+import { getApiKey, incrementApiKeyUsage } from './db.js';
 import { CONFIG } from './config.js';
 
 // ── Rate limit config ─────────────────────────────────────────────────────────
 const LIMITS = {
-  public:     30,
-  free:       60,
-  pro:        600,
+  public:     100,
+  free:       300,
+  pro:        1000,
   enterprise: Infinity,
 };
 
@@ -113,6 +113,9 @@ export async function applyMiddleware(req, res) {
 
     tier   = entry.tier;
     rateid = rawKey; // rate-limit per key, not per IP
+
+    // Track usage — fire and forget, never block the request
+    incrementApiKeyUsage(rawKey).catch(() => {});
   }
 
   const limit = LIMITS[tier] ?? LIMITS.public;
