@@ -16,9 +16,11 @@
 
 import http from 'http';
 import { CONFIG } from './config.js';
-import { pool } from './db.js';
+import { pool, ensureSchema } from './db.js';
 import { startFeed } from './feed.js';
+import { startIndexer } from './indexer.js';
 import { handleRequest } from './routes.js';
+import { applyMiddleware } from './middleware.js';
 
 const CORS_PREFLIGHT = {
   'Access-Control-Allow-Origin': '*',
@@ -35,6 +37,10 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Apply auth + rate limiting to all non-preflight requests
+  const allowed = await applyMiddleware(req, res);
+  if (!allowed) return;
+
   // Root — API index
   if (req.method === 'GET' && url.pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -44,14 +50,28 @@ const server = http.createServer(async (req, res) => {
       network: 'op_testnet',
       docs: 'https://github.com/TornGuard/blockfeed',
       endpoints: [
-        'GET /v1/status',
-        'GET /v1/fees/latest',
-        'GET /v1/fees/history?blocks=50',
-        'GET /v1/fees/stats',
-        'GET /v1/mempool/depth',
-        'GET /v1/blocks/latest',
-        'GET /v1/bets/stats',
-        'WS  /v1/stream',
+        'GET  /v1/status',
+        'GET  /v1/fees/latest',
+        'GET  /v1/fees/history?blocks=50',
+        'GET  /v1/fees/stats',
+        'GET  /v1/mempool/depth',
+        'GET  /v1/mempool/histogram',
+        'GET  /v1/blocks/latest',
+        'GET  /v1/blocks/activity?blocks=20',
+        'GET  /v1/blocks/activity/latest',
+        'GET  /v1/blocks/activity/stats',
+        'GET  /v1/events/recent?limit=50&type=Transferred&cursor=<id>',
+        'GET  /v1/events/types',
+        'GET  /v1/contracts/top?limit=10',
+        'GET  /v1/contracts/:address/events?limit=50&cursor=<id>&type=Transferred',
+        'GET  /v1/contracts/:address/stats',
+        'GET  /v1/tokens?limit=20',
+        'GET  /v1/tokens/:address',
+        'GET  /v1/tokens/:address/transfers?limit=50&cursor=<id>',
+        'GET  /v1/bets/stats',
+        'WS   /v1/stream',
+        'POST /v1/admin/keys  [x-admin-key required]',
+        'GET  /v1/admin/keys  [x-admin-key required]',
       ],
     }, null, 2));
     return;
@@ -65,8 +85,10 @@ const server = http.createServer(async (req, res) => {
     }
   } catch (err) {
     console.error('[BlockFeed] Error:', err.message);
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Internal server error' }));
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Internal server error' }));
+    }
   }
 });
 
@@ -79,11 +101,13 @@ server.listen(CONFIG.port, async () => {
   console.log(`[BlockFeed] REST: http://0.0.0.0:${CONFIG.port}/`);
   console.log(`[BlockFeed] WS:   ws://0.0.0.0:${CONFIG.port}/v1/stream`);
 
-  // Verify DB connection
+  // Verify DB + bootstrap schema + start indexer
   try {
     await pool.query('SELECT 1');
     console.log('[BlockFeed] ✅ Database connected');
+    await ensureSchema();
+    await startIndexer();
   } catch (err) {
-    console.error('[BlockFeed] ❌ Database connection failed:', err.message);
+    console.error('[BlockFeed] ❌ Startup error:', err.message);
   }
 });

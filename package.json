@@ -9,6 +9,7 @@
     "dev": "node --watch index.js"
   },
   "dependencies": {
+    "@btc-vision/transaction": "^1.7.23",
     "dotenv": "^16.4.5",
     "pg": "^8.11.3",
     "ws": "^8.17.1"
