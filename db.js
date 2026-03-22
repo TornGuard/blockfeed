@@ -75,6 +75,32 @@ export async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_contract_events_contract ON contract_events (contract_address);
     CREATE INDEX IF NOT EXISTS idx_fee_snapshots_block      ON fee_snapshots (block_height DESC);
     CREATE INDEX IF NOT EXISTS idx_tokens_status            ON tokens (fetch_status);
+
+    CREATE TABLE IF NOT EXISTS webhooks (
+      id               SERIAL PRIMARY KEY,
+      api_key          TEXT NOT NULL,
+      url              TEXT NOT NULL,
+      secret           TEXT NOT NULL,
+      event_type       TEXT,
+      contract_address TEXT,
+      active           BOOLEAN NOT NULL DEFAULT true,
+      failure_count    INT     NOT NULL DEFAULT 0,
+      last_fired_at    TIMESTAMPTZ,
+      created_at       TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_webhooks_key    ON webhooks (api_key);
+    CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhooks (active, event_type, contract_address);
+
+    CREATE TABLE IF NOT EXISTS oracle_prices (
+      id          SERIAL PRIMARY KEY,
+      symbol      TEXT          NOT NULL,
+      price       NUMERIC(20,8) NOT NULL,
+      sources     JSONB         NOT NULL,
+      confidence  NUMERIC(8,6)  NOT NULL,
+      signature   TEXT          NOT NULL,
+      captured_at TIMESTAMPTZ   DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_oracle_prices_symbol ON oracle_prices (symbol, captured_at DESC);
   `);
   console.log('[DB] Schema ready');
 }
@@ -326,6 +352,114 @@ export async function incrementApiKeyUsage(key) {
     `UPDATE api_keys SET request_count = request_count + 1, last_used_at = NOW() WHERE key = $1`,
     [key],
   );
+}
+
+// ── Oracle prices ─────────────────────────────────────────────────────────────
+export async function storeOraclePrice(symbol, price, sources, confidence, signature) {
+  const r = await pool.query(
+    `INSERT INTO oracle_prices (symbol, price, sources, confidence, signature)
+     VALUES ($1, $2, $3::jsonb, $4, $5) RETURNING id, captured_at`,
+    [symbol, price, JSON.stringify(sources), confidence, signature],
+  );
+  return r.rows[0];
+}
+
+export async function getLatestOraclePrice(symbol = 'BTC/USD') {
+  const r = await pool.query(
+    `SELECT id, symbol, price::float, sources, confidence::float, signature, captured_at
+     FROM oracle_prices WHERE symbol = $1 ORDER BY id DESC LIMIT 1`,
+    [symbol],
+  );
+  return r.rows[0] || null;
+}
+
+export async function getOraclePriceHistory(symbol = 'BTC/USD', limit = 50) {
+  const r = await pool.query(
+    `SELECT id, symbol, price::float, confidence::float, captured_at
+     FROM oracle_prices WHERE symbol = $1 ORDER BY id DESC LIMIT $2`,
+    [symbol, Math.min(limit, 500)],
+  );
+  return r.rows;
+}
+
+export async function getOracleSymbols() {
+  const r = await pool.query(
+    `SELECT DISTINCT ON (symbol) symbol, price::float, confidence::float, captured_at
+     FROM oracle_prices ORDER BY symbol, captured_at DESC`,
+  );
+  return r.rows;
+}
+
+// ── Webhooks ──────────────────────────────────────────────────────────────────
+export async function createWebhook(apiKey, url, secret, eventType, contractAddress) {
+  const r = await pool.query(
+    `INSERT INTO webhooks (api_key, url, secret, event_type, contract_address)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
+    [apiKey, url, secret, eventType || null, contractAddress || null],
+  );
+  return r.rows[0];
+}
+
+export async function listWebhooks(apiKey) {
+  const r = await pool.query(
+    `SELECT id, url, event_type, contract_address, active, failure_count, last_fired_at, created_at
+     FROM webhooks WHERE api_key = $1 ORDER BY id DESC`,
+    [apiKey],
+  );
+  return r.rows;
+}
+
+export async function deleteWebhook(id, apiKey) {
+  const r = await pool.query(
+    `DELETE FROM webhooks WHERE id = $1 AND api_key = $2 RETURNING id`,
+    [id, apiKey],
+  );
+  return r.rowCount > 0;
+}
+
+export async function toggleWebhook(id, apiKey, active) {
+  const r = await pool.query(
+    `UPDATE webhooks SET active = $3, failure_count = 0 WHERE id = $1 AND api_key = $2 RETURNING id`,
+    [id, apiKey, active],
+  );
+  return r.rowCount > 0;
+}
+
+export async function getMatchingWebhooks(eventType, contractAddress) {
+  const r = await pool.query(
+    `SELECT id, url, secret
+     FROM webhooks
+     WHERE active = true
+       AND (event_type IS NULL OR event_type = $1)
+       AND (contract_address IS NULL OR contract_address = $2)`,
+    [eventType, contractAddress],
+  );
+  return r.rows;
+}
+
+export async function recordWebhookDelivery(id, success) {
+  if (success) {
+    await pool.query(
+      `UPDATE webhooks SET last_fired_at = NOW(), failure_count = 0 WHERE id = $1`,
+      [id],
+    );
+  } else {
+    await pool.query(
+      `UPDATE webhooks
+       SET failure_count = failure_count + 1,
+           active = CASE WHEN failure_count + 1 >= 10 THEN false ELSE active END
+       WHERE id = $1`,
+      [id],
+    );
+  }
+}
+
+export async function countWebhooks(apiKey) {
+  const r = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM webhooks WHERE api_key = $1`,
+    [apiKey],
+  );
+  return r.rows[0].n;
 }
 
 // ── Bet activity summary (public, no wallet data)

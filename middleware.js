@@ -114,6 +114,9 @@ export async function applyMiddleware(req, res) {
     tier   = entry.tier;
     rateid = rawKey; // rate-limit per key, not per IP
 
+    // Expose resolved key entry to downstream handlers
+    req.apiKeyEntry = { key: rawKey, name: entry.name, tier: entry.tier };
+
     // Track usage — fire and forget, never block the request
     incrementApiKeyUsage(rawKey).catch(() => {});
   }

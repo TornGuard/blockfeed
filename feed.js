@@ -51,3 +51,11 @@ export function startFeed(server) {
 export function getConnectedClients() {
   return wss ? wss.clients.size : 0;
 }
+
+export function broadcast(type, data) {
+  if (!wss || wss.clients.size === 0) return;
+  const payload = JSON.stringify({ type, data });
+  for (const client of wss.clients) {
+    if (client.readyState === 1) client.send(payload);
+  }
+}

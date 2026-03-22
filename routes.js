@@ -1,5 +1,9 @@
 import crypto from 'crypto';
 import {
+  getLatestOraclePrice, getOraclePriceHistory, getOracleSymbols,
+} from './db.js';
+import { getOraclePubKey } from './oracle.js';
+import {
   getLatestFee, getFeeHistory, getFeeStats, getBetStats,
   getBlockActivity, getLatestBlockActivity, getActivityStats,
   getRecentEvents, getTopContracts, getEventTypeSummary,
@@ -7,6 +11,7 @@ import {
   getToken, getTokens,
   getContractEvents, getContractStats,
   createApiKey, listApiKeys,
+  createWebhook, listWebhooks, deleteWebhook, toggleWebhook, countWebhooks,
 } from './db.js';
 import { getConnectedClients } from './feed.js';
 import { isAdminRequest } from './middleware.js';
@@ -209,6 +214,101 @@ export async function handleRequest(req, res, url) {
   // ── GET /v1/bets/stats ───────────────────────────────────────────────────
   if (req.method === 'GET' && path === '/v1/bets/stats') {
     return json(res, { ok: true, data: await getBetStats() });
+  }
+
+  // ── Oracle ────────────────────────────────────────────────────────────────
+
+  // GET /v1/oracle/pubkey — ed25519 public key (hex SPKI DER) for signature verification
+  if (req.method === 'GET' && path === '/v1/oracle/pubkey') {
+    return json(res, { ok: true, data: { pubkey: getOraclePubKey(), algorithm: 'ed25519' } });
+  }
+
+  // GET /v1/oracle/prices — latest price for all tracked symbols
+  if (req.method === 'GET' && path === '/v1/oracle/prices') {
+    const rows = await getOracleSymbols();
+    return json(res, { ok: true, data: rows });
+  }
+
+  // GET /v1/oracle/btc — latest BTC/USD price with signature
+  if (req.method === 'GET' && path === '/v1/oracle/btc') {
+    const row = await getLatestOraclePrice('BTC/USD');
+    if (!row) return json(res, { error: 'No oracle data yet' }, 503);
+    return json(res, { ok: true, data: row });
+  }
+
+  // GET /v1/oracle/history?symbol=BTC/USD&limit=50
+  if (req.method === 'GET' && path === '/v1/oracle/history') {
+    const symbol = qs.get('symbol') || 'BTC/USD';
+    const limit  = parseLimit(qs, 50, 500);
+    const rows   = await getOraclePriceHistory(symbol, limit);
+    return json(res, { ok: true, count: rows.length, data: rows });
+  }
+
+  // ── Webhook CRUD (requires API key, not public) ───────────────────────────
+
+  // POST /v1/webhooks — register a webhook
+  if (req.method === 'POST' && path === '/v1/webhooks') {
+    const entry = req.apiKeyEntry;
+    if (!entry) return json(res, { error: 'API key required to manage webhooks' }, 401);
+
+    const LIMITS = { free: 5, pro: 25, enterprise: Infinity };
+    const cap = LIMITS[entry.tier] ?? LIMITS.free;
+    const current = await countWebhooks(entry.key);
+    if (current >= cap) return json(res, { error: `Webhook limit reached (${cap} for ${entry.tier} tier)` }, 429);
+
+    let body;
+    try { body = await readBody(req); } catch { return json(res, { error: 'Invalid JSON' }, 400); }
+
+    const url = String(body.url || '').trim();
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      return json(res, { error: 'url must be a valid http/https URL' }, 400);
+    }
+    if (url.length > 2048) return json(res, { error: 'url too long' }, 400);
+
+    const eventType = body.event_type ? String(body.event_type).trim().slice(0, 64) : null;
+    const contract  = body.contract_address ? String(body.contract_address).trim() : null;
+    if (contract && !/^0x[0-9a-f]+$/i.test(contract)) {
+      return json(res, { error: 'invalid contract_address' }, 400);
+    }
+
+    const secret = crypto.randomBytes(24).toString('hex');
+    const row = await createWebhook(entry.key, url, secret, eventType, contract);
+    return json(res, {
+      ok:     true,
+      data:   { id: row.id, url, event_type: eventType, contract_address: contract, secret, created_at: row.created_at },
+      notice: 'Save the secret — it will not be shown again.',
+    }, 201);
+  }
+
+  // GET /v1/webhooks — list own webhooks
+  if (req.method === 'GET' && path === '/v1/webhooks') {
+    const entry = req.apiKeyEntry;
+    if (!entry) return json(res, { error: 'API key required' }, 401);
+    const hooks = await listWebhooks(entry.key);
+    return json(res, { ok: true, count: hooks.length, data: hooks });
+  }
+
+  // DELETE /v1/webhooks/:id — remove a webhook
+  if (req.method === 'DELETE' && /^\/v1\/webhooks\/\d+$/.test(path)) {
+    const entry = req.apiKeyEntry;
+    if (!entry) return json(res, { error: 'API key required' }, 401);
+    const id = parseInt(path.split('/')[3], 10);
+    const ok = await deleteWebhook(id, entry.key);
+    if (!ok) return json(res, { error: 'Not found' }, 404);
+    return json(res, { ok: true });
+  }
+
+  // PATCH /v1/webhooks/:id — toggle active/inactive
+  if (req.method === 'PATCH' && /^\/v1\/webhooks\/\d+$/.test(path)) {
+    const entry = req.apiKeyEntry;
+    if (!entry) return json(res, { error: 'API key required' }, 401);
+    let body;
+    try { body = await readBody(req); } catch { return json(res, { error: 'Invalid JSON' }, 400); }
+    if (typeof body.active !== 'boolean') return json(res, { error: 'active (boolean) required' }, 400);
+    const id = parseInt(path.split('/')[3], 10);
+    const ok = await toggleWebhook(id, entry.key, body.active);
+    if (!ok) return json(res, { error: 'Not found' }, 404);
+    return json(res, { ok: true, active: body.active });
   }
 
   // ── POST /v1/admin/keys ──────────────────────────────────────────────────

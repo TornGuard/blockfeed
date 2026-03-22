@@ -10,6 +10,7 @@ import { pool } from './db.js';
 import { decodeEvent } from './decoder.js';
 import { upsertToken } from './db.js';
 import { fetchAndStoreTokenMetadata } from './token-fetcher.js';
+import { deliverEvents } from './webhooks.js';
 
 const OPNET_RPC     = 'https://testnet.opnet.org/api/v1/json-rpc';
 const MEMPOOL_API   = 'https://mempool.space/api/mempool';
@@ -73,6 +74,7 @@ async function indexBlock(height) {
 
   // Collect new contract addresses for token registry
   const newContracts = new Set();
+  const insertedEvents = [];
 
   // Persist events (ignore duplicates)
   for (const ev of events) {
@@ -81,14 +83,20 @@ async function indexBlock(height) {
         (block_height, tx_hash, contract_address, event_type, from_address, raw_data, decoded)
       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
       ON CONFLICT DO NOTHING
-      RETURNING id
+      RETURNING id, block_height, tx_hash, contract_address, event_type, from_address, decoded, ts
     `, [height, ev.tx_hash, ev.contract_address, ev.event_type, ev.from_address, ev.raw_data,
         ev.decoded ? JSON.stringify(ev.decoded) : null]);
 
     if (result.rows.length > 0) {
       // New row inserted — this contract may not be in the token registry yet
       newContracts.add(ev.contract_address);
+      insertedEvents.push(result.rows[0]);
     }
+  }
+
+  // Fire webhooks for all newly inserted events (fire-and-forget)
+  if (insertedEvents.length > 0) {
+    deliverEvents(insertedEvents);
   }
 
   // Upsert token registry entries and kick off metadata fetch for new ones

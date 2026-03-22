@@ -21,6 +21,8 @@ import { startFeed } from './feed.js';
 import { startIndexer } from './indexer.js';
 import { handleRequest } from './routes.js';
 import { applyMiddleware } from './middleware.js';
+import { handleGraphQL } from './graphql.js';
+import { startOracle } from './oracle.js';
 
 const CORS_PREFLIGHT = {
   'Access-Control-Allow-Origin': '*',
@@ -34,6 +36,14 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, CORS_PREFLIGHT);
     res.end();
+    return;
+  }
+
+  // GraphQL — bypass rate limiting for introspection but apply for queries
+  if (url.pathname === '/graphql') {
+    const allowed = await applyMiddleware(req, res);
+    if (!allowed) return;
+    await handleGraphQL(req, res);
     return;
   }
 
@@ -69,7 +79,17 @@ const server = http.createServer(async (req, res) => {
         'GET  /v1/tokens/:address',
         'GET  /v1/tokens/:address/transfers?limit=50&cursor=<id>',
         'GET  /v1/bets/stats',
+        'GET  /v1/oracle/btc',
+        'GET  /v1/oracle/prices',
+        'GET  /v1/oracle/history?symbol=BTC/USD&limit=50',
+        'GET  /v1/oracle/pubkey',
+        'POST /v1/webhooks  [x-api-key required]',
+        'GET  /v1/webhooks  [x-api-key required]',
+        'DELETE /v1/webhooks/:id  [x-api-key required]',
+        'PATCH  /v1/webhooks/:id  [x-api-key required]',
         'WS   /v1/stream',
+        'POST /graphql  (GraphQL API — same data, flexible queries)',
+        'GET  /graphql  (GraphiQL playground)',
         'POST /v1/admin/keys  [x-admin-key required]',
         'GET  /v1/admin/keys  [x-admin-key required]',
       ],
@@ -107,6 +127,7 @@ server.listen(CONFIG.port, async () => {
     console.log('[BlockFeed] ✅ Database connected');
     await ensureSchema();
     await startIndexer();
+    await startOracle();
   } catch (err) {
     console.error('[BlockFeed] ❌ Startup error:', err.message);
   }

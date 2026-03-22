@@ -11,6 +11,8 @@
   "dependencies": {
     "@btc-vision/transaction": "^1.7.23",
     "dotenv": "^16.4.5",
+    "graphql": "^16.13.1",
+    "graphql-http": "^1.22.4",
     "pg": "^8.11.3",
     "ws": "^8.17.1"
   }
