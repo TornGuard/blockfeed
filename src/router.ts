@@ -231,7 +231,7 @@ export function registerRoutes(app: HyperExpress.Server): void {
             getAddressOverview(req.params.address),
             getAddressTokenActivity(req.params.address, 10),
         ]);
-        if (!overview || Number(overview.tx_count) === 0) {
+        if (!overview) {
             res.status(404).json({ error: 'Address not found' });
             return;
         }

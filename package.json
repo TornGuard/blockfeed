@@ -1,19 +1,31 @@
 {
   "name": "blockfeed",
-  "version": "0.1.0",
-  "description": "Real-time Bitcoin mempool + OPNet data API",
+  "version": "1.0.0",
+  "description": "Bitcoin + OPNet Data API — Chainlink-style price feeds, Alchemy-style node access",
   "type": "module",
-  "main": "index.js",
+  "main": "dist/src/server.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "node --watch index.js"
+    "build": "tsc --noEmit false",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/src/server.js",
+    "dev": "node --watch --loader ts-node/esm src/server.ts",
+    "lint": "eslint src/ workers/ --ext .ts"
   },
   "dependencies": {
+    "@btc-vision/hyper-express": "^6.17.4",
     "@btc-vision/transaction": "^1.7.23",
+    "@btc-vision/uwebsockets.js": "^20.57.0",
     "dotenv": "^16.4.5",
     "graphql": "^16.13.1",
     "graphql-http": "^1.22.4",
-    "pg": "^8.11.3",
-    "ws": "^8.17.1"
+    "pg": "^8.11.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "latest",
+    "@types/node": "^25.5.0",
+    "@types/pg": "^8.20.0",
+    "eslint": "latest",
+    "typescript": "^6.0.2",
+    "typescript-eslint": "latest"
   }
 }

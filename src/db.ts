@@ -418,7 +418,18 @@ export async function getOhlcv(symbol: string, interval: string, limit: number):
 }
 
 // ── Address analytics ─────────────────────────────────────────────────────────
+
+/** Addresses are stored as base64 in contract_events. Accept hex or base64. */
+function normaliseAddress(address: string): string {
+    // If it looks like a 64-char hex string, convert to base64
+    if (/^[0-9a-fA-F]{64}$/.test(address)) {
+        return Buffer.from(address, 'hex').toString('base64');
+    }
+    return address;
+}
+
 export async function getAddressOverview(address: string): Promise<Omit<AddressOverview, 'address' | 'top_tokens'> | null> {
+    const addr = normaliseAddress(address);
     const r = await pool.query(
         `SELECT COUNT(DISTINCT tx_hash)::int AS tx_count,
                 COUNT(DISTINCT contract_address)::int AS contracts_touched,
@@ -426,13 +437,14 @@ export async function getAddressOverview(address: string): Promise<Omit<AddressO
                 MAX(block_height)::bigint AS last_seen_block,
                 COUNT(*)::int AS total_events
          FROM contract_events WHERE from_address = $1`,
-        [address],
+        [addr],
     );
     return r.rows[0] ?? null;
 }
 
 export async function getAddressTxs(address: string, limit: number, cursor: number | null): Promise<DbContractEvent[]> {
-    const params: (string | number | null)[] = [address, Math.min(limit, 200)];
+    const addr = normaliseAddress(address);
+    const params: (string | number | null)[] = [addr, Math.min(limit, 200)];
     const cursorClause = cursor ? `AND id < $${params.push(cursor)}` : '';
     const r = await pool.query<DbContractEvent>(
         `SELECT * FROM contract_events WHERE from_address = $1 ${cursorClause} ORDER BY id DESC LIMIT $2`,
@@ -442,6 +454,7 @@ export async function getAddressTxs(address: string, limit: number, cursor: numb
 }
 
 export async function getAddressTokenActivity(address: string, limit: number): Promise<unknown[]> {
+    const addr = normaliseAddress(address);
     const r = await pool.query(
         `SELECT ce.contract_address, t.symbol, t.name, t.decimals,
                 COUNT(*)::int AS interaction_count,
@@ -451,7 +464,7 @@ export async function getAddressTokenActivity(address: string, limit: number): P
          WHERE ce.from_address = $1
          GROUP BY ce.contract_address, t.symbol, t.name, t.decimals
          ORDER BY interaction_count DESC LIMIT $2`,
-        [address, Math.min(limit, 100)],
+        [addr, Math.min(limit, 100)],
     );
     return r.rows;
 }
