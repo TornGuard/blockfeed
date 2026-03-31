@@ -136,6 +136,7 @@ export function startFeed(uwsApp: UWsApp): void {
 
         open: (ws) => {
             connectedClients++;
+            ws.subscribe('broadcast:all');
             console.log(`[Feed] Client connected (${connectedClients} total)`);
             // Send snapshot of current state immediately on connect
             Promise.all([getLatestFee(), getLatestBlockActivity()]).then(([fee, blk]) => {
