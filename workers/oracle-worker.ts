@@ -1,7 +1,7 @@
 /**
  * Oracle Worker Thread
  *
- * Polls external price APIs for BTC/USD, ETH/USD, SOL/USD, BNB/USD, MATIC/USD.
+ * Polls external price APIs for BTC/USD.
  * Aggregates using median consensus. Signs each tick with ed25519.
  * Writes to oracle_prices table and notifies main thread for WebSocket broadcast.
  */
@@ -59,25 +59,6 @@ const SYMBOLS: Record<string, SymbolSources> = {
         binance:   () => fetchJson<{ price: string }>('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT').then(j => parseFloat(j.price)),
         kraken:    () => fetchJson<{ result: { XXBTZUSD: { c: string[] } } }>('https://api.kraken.com/0/public/Ticker?pair=XBTUSD').then(j => parseFloat(j.result.XXBTZUSD.c[0])),
         coingecko: () => fetchJson<{ bitcoin: { usd: number } }>('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd').then(j => j.bitcoin.usd),
-    },
-    'ETH/USD': {
-        coinbase:  () => fetchJson<{ data: { amount: string } }>('https://api.coinbase.com/v2/prices/ETH-USD/spot').then(j => parseFloat(j.data.amount)),
-        binance:   () => fetchJson<{ price: string }>('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT').then(j => parseFloat(j.price)),
-        kraken:    () => fetchJson<{ result: { ETHUSD: { c: string[] } } }>('https://api.kraken.com/0/public/Ticker?pair=ETHUSD').then(j => parseFloat(j.result.ETHUSD.c[0])),
-        coingecko: () => fetchJson<{ ethereum: { usd: number } }>('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd').then(j => j.ethereum.usd),
-    },
-    'SOL/USD': {
-        coinbase:  () => fetchJson<{ data: { amount: string } }>('https://api.coinbase.com/v2/prices/SOL-USD/spot').then(j => parseFloat(j.data.amount)),
-        binance:   () => fetchJson<{ price: string }>('https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT').then(j => parseFloat(j.price)),
-        coingecko: () => fetchJson<{ solana: { usd: number } }>('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd').then(j => j.solana.usd),
-    },
-    'BNB/USD': {
-        binance:   () => fetchJson<{ price: string }>('https://api.binance.com/api/v3/ticker/price?symbol=BNBUSDT').then(j => parseFloat(j.price)),
-        coingecko: () => fetchJson<{ binancecoin: { usd: number } }>('https://api.coingecko.com/api/v3/simple/price?ids=binancecoin&vs_currencies=usd').then(j => j.binancecoin.usd),
-    },
-    'MATIC/USD': {
-        binance:   () => fetchJson<{ price: string }>('https://api.binance.com/api/v3/ticker/price?symbol=MATICUSDT').then(j => parseFloat(j.price)),
-        coingecko: () => fetchJson<{ 'matic-network': { usd: number } }>('https://api.coingecko.com/api/v3/simple/price?ids=matic-network&vs_currencies=usd').then(j => j['matic-network'].usd),
     },
 };
 

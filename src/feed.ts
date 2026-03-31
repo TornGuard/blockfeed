@@ -20,6 +20,7 @@
 
 import uWS from '@btc-vision/uwebsockets.js';
 import type { WsClientSubs, WsClientMsg, WorkerBroadcastMsg } from './types.js';
+import { getLatestFee, getLatestBlockActivity } from './db.js';
 
 type UWsApp = ReturnType<typeof uWS.App>;
 
@@ -133,9 +134,23 @@ export function startFeed(uwsApp: UWsApp): void {
             );
         },
 
-        open: (_ws) => {
+        open: (ws) => {
             connectedClients++;
             console.log(`[Feed] Client connected (${connectedClients} total)`);
+            // Send snapshot of current state immediately on connect
+            Promise.all([getLatestFee(), getLatestBlockActivity()]).then(([fee, blk]) => {
+                if (!fee) return;
+                const snap = JSON.stringify({
+                    type: 'snapshot',
+                    data: {
+                        block:   blk?.block_height ?? fee.block_height,
+                        fee:     fee.median_fee_scaled,
+                        mempool: fee.mempool_count,
+                        ts:      fee.submitted_at,
+                    },
+                });
+                safeSend(ws, snap);
+            }).catch(() => { /* ignore */ });
         },
 
         message: (ws, message) => {
@@ -153,6 +168,13 @@ export function startFeed(uwsApp: UWsApp): void {
 
 export function getConnectedClients(): number {
     return connectedClients;
+}
+
+/** Push a live block/fee update to all connected clients. */
+export function broadcastBlock(block: number, fee: number, mempool: number, ts: Date): void {
+    if (!app) return;
+    const payload = JSON.stringify({ type: 'block', data: { block, fee, mempool, ts } });
+    app.publish('broadcast:all', payload, false, false);
 }
 
 /**

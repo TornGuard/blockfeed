@@ -14,7 +14,7 @@ import { pool, ensureSchema } from './db.js';
 import { startFeed } from './feed.js';
 import { registerRoutes } from './router.js';
 import type { WorkerMsg } from './types.js';
-import { broadcast } from './feed.js';
+import { broadcast, broadcastBlock } from './feed.js';
 import { setGauge, incCounter } from './metrics.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -63,6 +63,11 @@ function startWorker(scriptPath: string, label: string): Worker {
     worker.on('message', (msg: WorkerMsg) => {
         if (msg.type === 'broadcast') {
             broadcast(msg);
+            // Push block/fee update to WS clients whenever keeper submits new data
+            if (msg.event === 'fee_update') {
+                const d = msg.data as { block_height: number; median_fee_scaled: number; mempool_count: number; submitted_at: Date };
+                broadcastBlock(d.block_height, d.median_fee_scaled, d.mempool_count, d.submitted_at);
+            }
         } else if (msg.type === 'log') {
             const fn = msg.level === 'error' ? console.error
                      : msg.level === 'warn'  ? console.warn
