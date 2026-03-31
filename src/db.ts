@@ -170,9 +170,9 @@ export async function getFeeHistory(limit: number): Promise<DbOracleFeed[]> {
 export async function getFeeStats(): Promise<unknown> {
     const r = await pool.query(`
         SELECT
-            MIN(median_fee_scaled)::float     AS min_fee,
-            MAX(median_fee_scaled)::float     AS max_fee,
-            AVG(median_fee_scaled)::float     AS avg_fee,
+            MIN(median_fee_scaled)::float / 100 AS min_fee,
+            MAX(median_fee_scaled)::float / 100 AS max_fee,
+            AVG(median_fee_scaled)::float / 100 AS avg_fee,
             MIN(mempool_count)::int           AS min_mempool,
             MAX(mempool_count)::int           AS max_mempool,
             AVG(mempool_count)::float         AS avg_mempool,
