@@ -56,9 +56,16 @@ interface OPNetTx {
 interface OPNetBlock {
     height: string; // hex
     transactions: OPNetTx[];
+    txCount?: number;
 }
 
-async function fetchBlockEvents(height: number): Promise<unknown[]> {
+interface BlockResult {
+    events: unknown[];
+    txCount: number;
+    contractCalls: number;
+}
+
+async function fetchBlock(height: number): Promise<BlockResult> {
     try {
         const hexHeight = `0x${height.toString(16)}`;
         const res = await fetch(`${OPNET_RPC}/api/v1/json-rpc`, {
@@ -67,14 +74,15 @@ async function fetchBlockEvents(height: number): Promise<unknown[]> {
             body: JSON.stringify({ jsonrpc: '2.0', method: 'btc_getBlockByNumber', params: [hexHeight, true], id: 1 }),
             signal: AbortSignal.timeout(20_000),
         });
-        if (!res.ok) return [];
+        if (!res.ok) return { events: [], txCount: 0, contractCalls: 0 };
         const json = await res.json() as { result?: OPNetBlock };
         const block = json.result;
-        if (!block?.transactions) return [];
+        if (!block?.transactions) return { events: [], txCount: 0, contractCalls: 0 };
 
-        // Flatten transactions → one entry per event
         const events: unknown[] = [];
+        let contractCalls = 0;
         for (const tx of block.transactions) {
+            if (tx.OPNetType === 'Interaction') contractCalls++;
             if (!tx.events?.length) continue;
             for (const ev of tx.events) {
                 events.push({
@@ -86,9 +94,9 @@ async function fetchBlockEvents(height: number): Promise<unknown[]> {
                 });
             }
         }
-        return events;
+        return { events, txCount: block.transactions.length, contractCalls };
     } catch {
-        return [];
+        return { events: [], txCount: 0, contractCalls: 0 };
     }
 }
 
@@ -99,11 +107,11 @@ async function tick(): Promise<void> {
     if (!latest || latest <= lastIndexedHeight) return;
 
     for (let h = lastIndexedHeight + 1; h <= latest; h++) {
-        const rawEvents = await fetchBlockEvents(h);
+        const { events: rawEvents, txCount, contractCalls } = await fetchBlock(h);
         const insertedEvents: unknown[] = [];
         const newContracts = new Set<string>();
 
-        await upsertBlockActivity(h, rawEvents.length);
+        await upsertBlockActivity(h, rawEvents.length, txCount, contractCalls);
 
         for (const raw of rawEvents) {
             const ev = raw as {

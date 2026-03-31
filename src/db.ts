@@ -197,12 +197,15 @@ export async function getLatestHistogram(): Promise<unknown[]> {
 }
 
 // ── Block activity ────────────────────────────────────────────────────────────
-export async function upsertBlockActivity(height: number, eventsCount: number): Promise<void> {
+export async function upsertBlockActivity(height: number, eventsCount: number, txCount = 0, contractCalls = 0): Promise<void> {
     await pool.query(
-        `INSERT INTO block_activity (block_height, events_count)
-         VALUES ($1, $2)
-         ON CONFLICT (block_height) DO UPDATE SET events_count = GREATEST(EXCLUDED.events_count, block_activity.events_count)`,
-        [height, eventsCount],
+        `INSERT INTO block_activity (block_height, events_count, tx_count, contract_calls)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (block_height) DO UPDATE
+           SET events_count   = GREATEST(EXCLUDED.events_count, block_activity.events_count),
+               tx_count       = GREATEST(EXCLUDED.tx_count,     block_activity.tx_count),
+               contract_calls = GREATEST(EXCLUDED.contract_calls, block_activity.contract_calls)`,
+        [height, eventsCount, txCount, contractCalls],
     );
 }
 
