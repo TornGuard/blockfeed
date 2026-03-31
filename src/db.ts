@@ -208,16 +208,19 @@ export async function getBlockActivity(limit: number): Promise<DbBlockActivity[]
 }
 
 export async function getActivityStats(): Promise<unknown> {
-    const r = await pool.query(`
-        SELECT
-            COUNT(*)::int           AS total_blocks,
-            SUM(tx_count)::int      AS total_txs,
-            SUM(events_count)::int  AS total_events,
-            AVG(tx_count)::float    AS avg_tx_per_block,
-            MAX(block_height)::int  AS latest_block
-        FROM block_activity
-    `);
-    return r.rows[0];
+    const [actRow, contractRow] = await Promise.all([
+        pool.query(`
+            SELECT
+                COUNT(*)::int           AS total_blocks,
+                SUM(tx_count)::int      AS total_txs,
+                SUM(events_count)::int  AS total_events,
+                AVG(tx_count)::float    AS avg_tx_per_block,
+                MAX(block_height)::int  AS latest_block
+            FROM block_activity
+        `),
+        pool.query(`SELECT COUNT(DISTINCT contract_address)::int AS total_contracts FROM contract_events`),
+    ]);
+    return { ...actRow.rows[0], total_contracts: contractRow.rows[0]?.total_contracts ?? 0 };
 }
 
 // ── Contract events ───────────────────────────────────────────────────────────
