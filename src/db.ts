@@ -178,7 +178,7 @@ export async function getFeeStats(): Promise<unknown> {
             AVG(mempool_count)::float         AS avg_mempool,
             COUNT(*)::int                     AS total_feeds
         FROM oracle_feeds
-        WHERE submitted_at > NOW() - INTERVAL '24 hours'
+        WHERE submitted_at > NOW() - INTERVAL '7 days'
     `);
     return r.rows[0];
 }
