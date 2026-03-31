@@ -29,21 +29,64 @@ async function fetchLatestBlock(): Promise<number | null> {
             signal: AbortSignal.timeout(10_000),
         });
         if (!res.ok) return null;
-        const json = await res.json() as { height?: number };
-        return json.height ?? null;
+        const json = await res.json();
+        // API returns a hex string like "0x2fd1"
+        if (typeof json === 'string') return parseInt(json, 16);
+        if (typeof json === 'object' && json !== null && 'height' in json) return Number((json as { height: unknown }).height);
+        return null;
     } catch {
         return null;
     }
 }
 
+interface OPNetEvent {
+    contractAddress: string; // 0x-prefixed hex
+    type: string;
+    data: string; // base64
+}
+
+interface OPNetTx {
+    hash: string;
+    OPNetType: string;
+    contractAddress?: string; // bech32, present on Interaction txs
+    from?: string;            // base64 sender
+    events?: OPNetEvent[];
+}
+
+interface OPNetBlock {
+    height: string; // hex
+    transactions: OPNetTx[];
+}
+
 async function fetchBlockEvents(height: number): Promise<unknown[]> {
     try {
-        const res = await fetch(`${OPNET_RPC}/api/v1/block/${height}/events`, {
-            signal: AbortSignal.timeout(15_000),
+        const hexHeight = `0x${height.toString(16)}`;
+        const res = await fetch(`${OPNET_RPC}/api/v1/json-rpc`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', method: 'btc_getBlockByNumber', params: [hexHeight, true], id: 1 }),
+            signal: AbortSignal.timeout(20_000),
         });
         if (!res.ok) return [];
-        const json = await res.json() as { events?: unknown[] };
-        return json.events ?? [];
+        const json = await res.json() as { result?: OPNetBlock };
+        const block = json.result;
+        if (!block?.transactions) return [];
+
+        // Flatten transactions → one entry per event
+        const events: unknown[] = [];
+        for (const tx of block.transactions) {
+            if (!tx.events?.length) continue;
+            for (const ev of tx.events) {
+                events.push({
+                    txHash:          tx.hash,
+                    contractAddress: ev.contractAddress,
+                    eventType:       ev.type,
+                    fromAddress:     tx.from ?? null,
+                    data:            ev.data,
+                });
+            }
+        }
+        return events;
     } catch {
         return [];
     }
