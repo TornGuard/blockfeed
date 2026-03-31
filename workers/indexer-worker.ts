@@ -104,6 +104,14 @@ async function tick(): Promise<void> {
             fetchAndStoreTokenMetadata(addr).catch(() => undefined);
         }
 
+        // Notify main thread to broadcast new block to WebSocket clients
+        const blockMsg: WorkerMsg = {
+            type: 'broadcast',
+            event: 'block_update',
+            data: { block_height: h, event_count: insertedEvents.length, mempool_count: 0, median_fee_scaled: 0, submitted_at: new Date() },
+        };
+        parentPort?.postMessage(blockMsg);
+
         log('info', `Indexed block #${h} — ${insertedEvents.length} events`);
     }
 

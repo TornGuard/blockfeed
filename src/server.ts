@@ -64,7 +64,7 @@ function startWorker(scriptPath: string, label: string): Worker {
         if (msg.type === 'broadcast') {
             broadcast(msg);
             // Push block/fee update to WS clients whenever keeper submits new data
-            if (msg.event === 'fee_update') {
+            if (msg.event === 'fee_update' || msg.event === 'block_update') {
                 const d = msg.data as { block_height: number; median_fee_scaled: number; mempool_count: number; submitted_at: Date };
                 broadcastBlock(d.block_height, d.median_fee_scaled, d.mempool_count, d.submitted_at);
             }
