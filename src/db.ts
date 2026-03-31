@@ -139,6 +139,18 @@ export async function ensureSchema(): Promise<void> {
 }
 
 // ── Oracle feeds ──────────────────────────────────────────────────────────────
+export async function insertFeedRow(blockHeight: number, medianFeeScaled: number, mempoolCount: number): Promise<void> {
+    await pool.query(
+        `INSERT INTO oracle_feeds (block_height, median_fee_scaled, mempool_count)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (block_height) DO UPDATE
+           SET median_fee_scaled = EXCLUDED.median_fee_scaled,
+               mempool_count     = EXCLUDED.mempool_count,
+               submitted_at      = NOW()`,
+        [blockHeight, medianFeeScaled, mempoolCount],
+    );
+}
+
 export async function getLatestFee(): Promise<DbOracleFeed | null> {
     const r = await pool.query<DbOracleFeed>(
         `SELECT * FROM oracle_feeds ORDER BY block_height DESC LIMIT 1`,

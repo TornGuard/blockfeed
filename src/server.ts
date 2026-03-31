@@ -95,6 +95,7 @@ async function boot(): Promise<void> {
     // Start workers
     startWorker(path.join(__dirname, '../workers/indexer-worker.js'), 'Indexer');
     startWorker(path.join(__dirname, '../workers/oracle-worker.js'),  'Oracle');
+    startWorker(path.join(__dirname, '../workers/fee-worker.js'),     'Fee');
 
     await app.listen(Config.port);
 
