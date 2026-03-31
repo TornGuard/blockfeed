@@ -42,6 +42,7 @@ export async function ensureSchema(): Promise<void> {
             UNIQUE (block_height)
         );
         CREATE INDEX IF NOT EXISTS idx_oracle_feeds_height ON oracle_feeds (block_height DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_oracle_feeds_unique_height ON oracle_feeds (block_height);
 
         CREATE TABLE IF NOT EXISTS block_activity (
             id              SERIAL PRIMARY KEY,
