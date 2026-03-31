@@ -52,6 +52,7 @@ export async function ensureSchema(): Promise<void> {
             indexed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
         CREATE INDEX IF NOT EXISTS idx_block_activity_height ON block_activity (block_height DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_block_activity_unique_height ON block_activity (block_height);
 
         CREATE TABLE IF NOT EXISTS contract_events (
             id               BIGSERIAL   PRIMARY KEY,
@@ -64,6 +65,7 @@ export async function ensureSchema(): Promise<void> {
             ts               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             UNIQUE (block_height, tx_hash, contract_address, event_type)
         );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_events_unique_key ON contract_events (block_height, tx_hash, contract_address, event_type);
         CREATE INDEX IF NOT EXISTS idx_events_contract   ON contract_events (contract_address, id DESC);
         CREATE INDEX IF NOT EXISTS idx_events_type       ON contract_events (event_type, id DESC);
         CREATE INDEX IF NOT EXISTS idx_events_from       ON contract_events (from_address, id DESC);
