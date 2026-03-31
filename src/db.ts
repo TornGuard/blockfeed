@@ -422,52 +422,121 @@ export async function getOhlcv(symbol: string, interval: string, limit: number):
 
 // ── Address analytics ─────────────────────────────────────────────────────────
 
-/** Addresses are stored as base64 in contract_events. Accept hex or base64. */
-function normaliseAddress(address: string): string {
-    // If it looks like a 64-char hex string, convert to base64
+// Bech32 charset for decoding opt1/bc1p/bc1q addresses
+const BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+
+function bech32ToBytes(addr: string): Buffer | null {
+    try {
+        const lower = addr.toLowerCase();
+        const sep = lower.lastIndexOf('1');
+        if (sep < 1 || sep + 7 > lower.length) return null;
+        // decode base32 chars (skip the separator '1')
+        const data5: number[] = [];
+        for (let i = sep + 1; i < lower.length; i++) {
+            const v = BECH32_CHARSET.indexOf(lower[i]);
+            if (v < 0) return null;
+            data5.push(v);
+        }
+        // strip 6-char checksum, first byte is witness version
+        const payload5 = data5.slice(0, -6).slice(1);
+        // convert 5-bit groups to 8-bit bytes
+        let acc = 0, bits = 0;
+        const bytes: number[] = [];
+        for (const v of payload5) {
+            acc = (acc << 5) | v;
+            bits += 5;
+            if (bits >= 8) { bits -= 8; bytes.push((acc >> bits) & 0xff); }
+        }
+        return bytes.length === 32 ? Buffer.from(bytes) : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Convert any address form to the base64 used in contract_events.from_address.
+ * Accepts: bech32 opt1/bc1p/bc1q, 64-char hex, or base64 as-is.
+ */
+function toBase64Address(address: string): string {
+    if (/^(opt1|bc1p|bc1q)/i.test(address)) {
+        const bytes = bech32ToBytes(address);
+        if (bytes) return bytes.toString('base64');
+    }
     if (/^[0-9a-fA-F]{64}$/.test(address)) {
         return Buffer.from(address, 'hex').toString('base64');
     }
-    return address;
+    return address; // already base64 or unknown — pass through
 }
 
+/**
+ * Convert any address form to the 0x-prefixed hex used in contract_events.contract_address.
+ * Returns null if the address cannot be decoded.
+ */
+function toHexAddress(address: string): string | null {
+    if (/^(opt1|bc1p|bc1q)/i.test(address)) {
+        const bytes = bech32ToBytes(address);
+        if (bytes) return '0x' + bytes.toString('hex');
+    }
+    if (/^[0-9a-fA-F]{64}$/.test(address)) {
+        return '0x' + address.toLowerCase();
+    }
+    if (/^0x[0-9a-fA-F]{64}$/i.test(address)) {
+        return address.toLowerCase();
+    }
+    return null;
+}
+
+// Keep old name for internal callers
+function normaliseAddress(address: string): string { return toBase64Address(address); }
+
 export async function getAddressOverview(address: string): Promise<Omit<AddressOverview, 'address' | 'top_tokens'> | null> {
-    const addr = normaliseAddress(address);
+    const b64  = toBase64Address(address);
+    const hex  = toHexAddress(address);
+    // Search by from_address (wallet/sender) OR contract_address (contract)
     const r = await pool.query(
         `SELECT COUNT(DISTINCT tx_hash)::int AS tx_count,
                 COUNT(DISTINCT contract_address)::int AS contracts_touched,
                 MIN(block_height)::bigint AS first_seen_block,
                 MAX(block_height)::bigint AS last_seen_block,
                 COUNT(*)::int AS total_events
-         FROM contract_events WHERE from_address = $1`,
-        [addr],
+         FROM contract_events
+         WHERE from_address = $1 OR ($2::text IS NOT NULL AND contract_address = $2)`,
+        [b64, hex],
     );
-    return r.rows[0] ?? null;
+    const row = r.rows[0];
+    if (!row || (row.tx_count === 0 && row.total_events === 0)) return null;
+    return row;
 }
 
 export async function getAddressTxs(address: string, limit: number, cursor: number | null): Promise<DbContractEvent[]> {
-    const addr = normaliseAddress(address);
-    const params: (string | number | null)[] = [addr, Math.min(limit, 200)];
+    const b64  = toBase64Address(address);
+    const hex  = toHexAddress(address);
+    const lim  = Math.min(limit, 200);
+    const params: (string | number | null)[] = [b64, hex, lim];
     const cursorClause = cursor ? `AND id < $${params.push(cursor)}` : '';
     const r = await pool.query<DbContractEvent>(
-        `SELECT * FROM contract_events WHERE from_address = $1 ${cursorClause} ORDER BY id DESC LIMIT $2`,
+        `SELECT * FROM contract_events
+         WHERE (from_address = $1 OR ($2::text IS NOT NULL AND contract_address = $2))
+         ${cursorClause}
+         ORDER BY id DESC LIMIT $3`,
         params,
     );
     return r.rows;
 }
 
 export async function getAddressTokenActivity(address: string, limit: number): Promise<unknown[]> {
-    const addr = normaliseAddress(address);
+    const b64 = toBase64Address(address);
+    const hex = toHexAddress(address);
     const r = await pool.query(
         `SELECT ce.contract_address, t.symbol, t.name, t.decimals,
                 COUNT(*)::int AS interaction_count,
                 MAX(ce.block_height)::bigint AS last_seen_block
          FROM contract_events ce
          LEFT JOIN tokens t ON t.contract_address = ce.contract_address
-         WHERE ce.from_address = $1
+         WHERE ce.from_address = $1 OR ($2::text IS NOT NULL AND ce.contract_address = $2)
          GROUP BY ce.contract_address, t.symbol, t.name, t.decimals
-         ORDER BY interaction_count DESC LIMIT $2`,
-        [addr, Math.min(limit, 100)],
+         ORDER BY interaction_count DESC LIMIT $3`,
+        [b64, hex, Math.min(limit, 100)],
     );
     return r.rows;
 }
@@ -505,37 +574,90 @@ export async function getTrendingTokens(limit: number): Promise<unknown[]> {
     return r.rows;
 }
 
-export async function globalSearch(query: string): Promise<unknown> {
-    const q   = query.trim().toLowerCase();
-    const res: Record<string, unknown[]> = { blocks: [], txs: [], contracts: [], tokens: [] };
+export async function globalSearch(query: string): Promise<{ type: string; id: string; description: string; extra?: Record<string, unknown> }[]> {
+    const q      = query.trim();
+    const qLower = q.toLowerCase();
+    const results: { type: string; id: string; description: string; extra?: Record<string, unknown> }[] = [];
 
+    // ── Block number ──────────────────────────────────────────────────────────
     const blockNum = parseInt(q, 10);
-    if (Number.isFinite(blockNum) && blockNum > 0) {
-        const r = await pool.query(`SELECT * FROM block_activity WHERE block_height = $1`, [blockNum]);
-        res['blocks'] = r.rows;
-    }
-
-    if (/^0x[0-9a-f]{8,}$/i.test(q)) {
+    if (Number.isFinite(blockNum) && blockNum > 0 && String(blockNum) === q) {
         const r = await pool.query(
-            `SELECT DISTINCT tx_hash, block_height, MIN(ts) AS ts FROM contract_events WHERE tx_hash = $1 GROUP BY tx_hash, block_height`,
-            [q],
+            `SELECT block_height, tx_count, event_count FROM block_activity WHERE block_height = $1`, [blockNum],
         );
-        res['txs'] = r.rows;
-
-        const r2 = await pool.query(`SELECT * FROM tokens WHERE contract_address = $1`, [q]);
-        res['contracts'] = r2.rows;
+        for (const row of r.rows) {
+            results.push({ type: 'block', id: String(row.block_height), description: `Block #${row.block_height}`, extra: { txs: row.tx_count, events: row.event_count } });
+        }
     }
 
-    if (q.length >= 2) {
+    // ── TX hash (64-char hex, no 0x prefix) ───────────────────────────────────
+    const isTxHash = /^[0-9a-f]{64}$/i.test(q);
+    if (isTxHash) {
         const r = await pool.query(
-            `SELECT * FROM tokens WHERE (LOWER(symbol) LIKE $1 OR LOWER(name) LIKE $1) AND symbol IS NOT NULL
+            `SELECT DISTINCT tx_hash, block_height FROM contract_events WHERE tx_hash = $1 LIMIT 1`, [q],
+        );
+        for (const row of r.rows) {
+            results.push({ type: 'tx', id: row.tx_hash, description: `Transaction in block #${row.block_height}` });
+        }
+    }
+
+    // ── Address / contract (bech32 opt1/bc1p/bc1q OR 0x-hex) ─────────────────
+    const isBech32  = /^(opt1|bc1p|bc1q)/i.test(q) && q.length > 20;
+    const is0xHex   = /^0x[0-9a-f]{64}$/i.test(q);
+    const isAddress = isBech32 || is0xHex;
+
+    if (isAddress) {
+        const hexAddr = is0xHex ? q.toLowerCase() : toHexAddress(q);
+
+        // Check if it's a known token/contract
+        if (hexAddr) {
+            const r = await pool.query(
+                `SELECT contract_address, name, symbol FROM tokens WHERE contract_address = $1`, [hexAddr],
+            );
+            if (r.rows.length > 0) {
+                for (const row of r.rows) {
+                    results.push({ type: 'contract', id: row.contract_address, description: row.name ?? row.contract_address, extra: { symbol: row.symbol } });
+                }
+            } else {
+                // Check if it has any events as a contract
+                const rc = await pool.query(
+                    `SELECT COUNT(*)::int AS cnt FROM contract_events WHERE contract_address = $1 LIMIT 1`, [hexAddr],
+                );
+                if ((rc.rows[0]?.cnt ?? 0) > 0) {
+                    results.push({ type: 'contract', id: hexAddr, description: `Contract ${q.slice(0, 14)}…${q.slice(-6)}` });
+                }
+            }
+        }
+
+        // Check if it has events as a sender (wallet address)
+        if (isBech32) {
+            const b64 = toBase64Address(q);
+            const rw = await pool.query(
+                `SELECT COUNT(DISTINCT tx_hash)::int AS tx_count FROM contract_events WHERE from_address = $1`, [b64],
+            );
+            if ((rw.rows[0]?.tx_count ?? 0) > 0) {
+                results.push({ type: 'address', id: q, description: `Address ${q.slice(0, 14)}…${q.slice(-6)}`, extra: { txs: rw.rows[0].tx_count } });
+            } else if (results.length === 0) {
+                // Show even if no events — let address page handle it
+                results.push({ type: 'address', id: q, description: `Address ${q.slice(0, 14)}…${q.slice(-6)}` });
+            }
+        }
+    }
+
+    // ── Token name / symbol fuzzy match ───────────────────────────────────────
+    if (q.length >= 2 && !isTxHash && !isAddress) {
+        const r = await pool.query(
+            `SELECT contract_address, name, symbol FROM tokens
+             WHERE (LOWER(symbol) LIKE $1 OR LOWER(name) LIKE $1) AND symbol IS NOT NULL
              ORDER BY CASE WHEN LOWER(symbol) = $2 THEN 0 ELSE 1 END LIMIT 20`,
-            [`%${q}%`, q],
+            [`%${qLower}%`, qLower],
         );
-        res['tokens'] = r.rows;
+        for (const row of r.rows) {
+            results.push({ type: 'token', id: row.contract_address, description: row.name ?? row.contract_address, extra: { symbol: row.symbol } });
+        }
     }
 
-    return res;
+    return results;
 }
 
 export async function getBetStats(): Promise<unknown> {
