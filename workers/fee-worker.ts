@@ -29,30 +29,29 @@ async function safeFetch(url: string): Promise<Response | null> {
     }
 }
 
+// Approximate Bitcoin block number from Unix timestamp (genesis Jan 3 2009, ~600s/block)
+function approxBtcHeight(): number {
+    return Math.floor((Date.now() / 1000 - 1231006505) / 600);
+}
+
 async function fetchFees(): Promise<void> {
-    log('info', 'Fee tick starting…');
-    const [feesRes, mempoolRes, blockRes] = await Promise.all([
+    const [feesRes, mempoolRes] = await Promise.all([
         safeFetch(`${MEMPOOL_BASE}/api/v1/fees/recommended`),
         safeFetch(`${MEMPOOL_BASE}/api/v1/mempool`),
-        safeFetch(`${MEMPOOL_BASE}/api/blocks/tip/height`),
     ]);
 
-    if (!feesRes || !mempoolRes || !blockRes) return;
+    if (!feesRes || !mempoolRes) return;
 
     const fees    = await feesRes.json()    as { halfHourFee?: number; hourFee?: number; economyFee?: number };
     const mempool = await mempoolRes.json() as { count?: number };
-    const height  = Number(await blockRes.text());
-
-    log('info', `Fee data: height=${height} fees=${JSON.stringify(fees)} mempoolCount=${mempool.count}`);
-
-    if (!height || isNaN(height)) { log('warn', `Invalid block height: ${height}`); return; }
+    const height  = approxBtcHeight();
 
     const medianFee       = fees.halfHourFee ?? fees.hourFee ?? fees.economyFee ?? 0;
     const medianFeeScaled = Math.round(medianFee * 100);
     const mempoolCount    = mempool.count ?? 0;
 
     await insertFeedRow(height, medianFeeScaled, mempoolCount);
-    log('info', `Fee tick done: block #${height}  fee=${medianFee} sat/vB  mempool=${mempoolCount} txs`);
+    log('info', `Fee tick: approx block #${height}  fee=${medianFee} sat/vB  mempool=${mempoolCount} txs`);
 }
 
 async function run(): Promise<void> {
