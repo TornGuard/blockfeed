@@ -486,8 +486,6 @@ function toHexAddress(address: string): string | null {
     return null;
 }
 
-// Keep old name for internal callers
-function normaliseAddress(address: string): string { return toBase64Address(address); }
 
 export async function getAddressOverview(address: string): Promise<Omit<AddressOverview, 'address' | 'top_tokens'> | null> {
     const b64  = toBase64Address(address);
