@@ -164,6 +164,14 @@ async function tick(): Promise<void> {
 async function run(): Promise<void> {
     await pool.query('SELECT 1');
     await ensureSchema();
+
+    // Seed from DB so we don't re-index blocks already stored
+    const { rows } = await pool.query<{ max: string | null }>('SELECT MAX(block_height) AS max FROM block_activity');
+    if (rows[0]?.max != null) {
+        lastIndexedHeight = Number(rows[0].max);
+        log('info', `Resuming from block #${lastIndexedHeight}`);
+    }
+
     log('info', 'Indexer worker started');
 
     // Run immediately then on interval
