@@ -610,10 +610,10 @@ export async function globalSearch(query: string): Promise<{ type: string; id: s
     const isTxHash = /^[0-9a-f]{64}$/i.test(q);
     if (isTxHash) {
         const r = await pool.query(
-            `SELECT DISTINCT tx_hash, block_height FROM contract_events WHERE tx_hash = $1 LIMIT 1`, [q],
+            `SELECT tx_hash, block_height, contract_address FROM contract_events WHERE tx_hash = $1 ORDER BY id ASC LIMIT 1`, [q],
         );
         for (const row of r.rows) {
-            results.push({ type: 'tx', id: row.tx_hash, description: `Transaction in block #${row.block_height}` });
+            results.push({ type: 'tx', id: row.tx_hash, description: `Transaction in block #${row.block_height}`, extra: { contract: row.contract_address } });
         }
     }
 
