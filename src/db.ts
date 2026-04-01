@@ -518,20 +518,26 @@ function toHexAddress(address: string): string | null {
 export async function getAddressOverview(address: string): Promise<Omit<AddressOverview, 'address' | 'top_tokens'> | null> {
     const b64  = toBase64Address(address);
     const hex  = toHexAddress(address);
-    // Search by from_address (wallet/sender) OR contract_address (contract)
     const r = await pool.query(
         `SELECT COUNT(DISTINCT tx_hash)::int AS tx_count,
                 COUNT(DISTINCT contract_address)::int AS contracts_touched,
                 MIN(block_height)::bigint AS first_seen_block,
                 MAX(block_height)::bigint AS last_seen_block,
-                COUNT(*)::int AS total_events
+                COUNT(*)::int AS total_events,
+                COUNT(*) FILTER (WHERE from_address = $1)::int AS wallet_event_count,
+                COUNT(*) FILTER (WHERE $2::text IS NOT NULL AND contract_address = $2)::int AS contract_event_count
          FROM contract_events
          WHERE from_address = $1 OR ($2::text IS NOT NULL AND contract_address = $2)`,
         [b64, hex],
     );
     const row = r.rows[0];
     if (!row || (row.tx_count === 0 && row.total_events === 0)) return null;
-    return row;
+    // Determine address type: if it appears as contract_address it's a contract, else a wallet
+    const address_type: 'contract' | 'wallet' | 'unknown' =
+        row.contract_event_count > 0 ? 'contract'
+        : row.wallet_event_count > 0 ? 'wallet'
+        : 'unknown';
+    return { ...row, address_type };
 }
 
 export async function getAddressTxs(address: string, limit: number, cursor: number | null): Promise<DbContractEvent[]> {
