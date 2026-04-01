@@ -482,6 +482,10 @@ function toBase64Address(address: string): string {
         const bytes = bech32ToBytes(address);
         if (bytes) return bytes.toString('base64');
     }
+    // 0x + 64 hex (OPNet wallet shown on OPScan, stored as base64 in from_address)
+    if (/^0x[0-9a-fA-F]{64}$/i.test(address)) {
+        return Buffer.from(address.slice(2), 'hex').toString('base64');
+    }
     if (/^[0-9a-fA-F]{64}$/.test(address)) {
         return Buffer.from(address, 'hex').toString('base64');
     }
