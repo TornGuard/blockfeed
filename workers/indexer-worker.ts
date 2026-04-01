@@ -47,6 +47,7 @@ interface OPNetEvent {
 
 interface OPNetTx {
     hash: string;
+    id: string;   // OPNet tx id — this is what OPScan displays
     OPNetType: string;
     contractAddress?: string; // bech32, present on Interaction txs
     from?: string;            // base64 sender
@@ -86,7 +87,7 @@ async function fetchBlock(height: number): Promise<BlockResult> {
             if (!tx.events?.length) continue;
             for (const ev of tx.events) {
                 events.push({
-                    txHash:          tx.hash,
+                    txHash:          tx.id ?? tx.hash,
                     contractAddress: ev.contractAddress,
                     eventType:       ev.type,
                     fromAddress:     tx.from ?? null,
