@@ -37,7 +37,7 @@ function approxBtcHeight(): number {
 async function fetchFees(): Promise<void> {
     const [feesRes, mempoolRes] = await Promise.all([
         safeFetch(`${MEMPOOL_BASE}/api/v1/fees/recommended`),
-        safeFetch(`${MEMPOOL_BASE}/api/v1/mempool`),
+        safeFetch(`${MEMPOOL_BASE}/api/mempool`),
     ]);
 
     if (!feesRes || !mempoolRes) return;

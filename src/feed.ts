@@ -145,7 +145,7 @@ export function startFeed(uwsApp: UWsApp): void {
                     type: 'snapshot',
                     data: {
                         block:   blk?.block_height ?? fee.block_height,
-                        fee:     fee.median_fee_scaled,
+                        fee:     (fee.median_fee_scaled ?? 0) / 100,
                         mempool: fee.mempool_count,
                         ts:      fee.submitted_at,
                     },

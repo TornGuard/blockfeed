@@ -473,15 +473,19 @@ function bech32ToBytes(addr: string): Buffer | null {
 
 /**
  * Convert any address form to the base64 used in contract_events.from_address.
- * Accepts: bech32 opt1/bc1p/bc1q, 64-char hex, or base64 as-is.
+ * Accepts: bech32 opt1/bc1*, legacy BTC 1.../3..., 64-char hex, or base64 as-is.
  */
 function toBase64Address(address: string): string {
-    if (/^(opt1|bc1p|bc1q)/i.test(address)) {
+    if (/^(opt1|bc1)/i.test(address)) {
         const bytes = bech32ToBytes(address);
         if (bytes) return bytes.toString('base64');
     }
     if (/^[0-9a-fA-F]{64}$/.test(address)) {
         return Buffer.from(address, 'hex').toString('base64');
+    }
+    // Legacy BTC addresses (P2PKH / P2SH) — pass through as raw string for direct match
+    if (/^[13][a-zA-Z0-9]{25,34}$/.test(address)) {
+        return address;
     }
     return address; // already base64 or unknown — pass through
 }
@@ -491,14 +495,14 @@ function toBase64Address(address: string): string {
  * Returns null if the address cannot be decoded.
  */
 function toHexAddress(address: string): string | null {
-    if (/^(opt1|bc1p|bc1q)/i.test(address)) {
+    if (/^(opt1|bc1)/i.test(address)) {
         const bytes = bech32ToBytes(address);
         if (bytes) return '0x' + bytes.toString('hex');
     }
     if (/^[0-9a-fA-F]{64}$/.test(address)) {
         return '0x' + address.toLowerCase();
     }
-    if (/^0x[0-9a-fA-F]{64}$/i.test(address)) {
+    if (/^0x[0-9a-fA-F]{40,64}$/i.test(address)) {
         return address.toLowerCase();
     }
     return null;
@@ -617,10 +621,11 @@ export async function globalSearch(query: string): Promise<{ type: string; id: s
         }
     }
 
-    // ── Address / contract (bech32 opt1/bc1p/bc1q OR 0x-hex) ─────────────────
-    const isBech32  = /^(opt1|bc1p|bc1q)/i.test(q) && q.length > 20;
-    const is0xHex   = /^0x[0-9a-f]{64}$/i.test(q);
-    const isAddress = isBech32 || is0xHex;
+    // ── Address / contract (bech32 opt1/bc1* OR legacy 1.../3... OR 0x-hex) ────
+    const isBech32    = /^(opt1|bc1)/i.test(q) && q.length > 10;
+    const isLegacyBtc = /^[13][a-zA-Z0-9]{25,34}$/.test(q);
+    const is0xHex     = /^0x[0-9a-f]{40,64}$/i.test(q);
+    const isAddress   = isBech32 || isLegacyBtc || is0xHex;
 
     if (isAddress) {
         const hexAddr = is0xHex ? q.toLowerCase() : toHexAddress(q);
@@ -646,15 +651,19 @@ export async function globalSearch(query: string): Promise<{ type: string; id: s
         }
 
         // Check if it has events as a sender (wallet address)
-        if (isBech32) {
+        if (isBech32 || isLegacyBtc) {
             const b64 = toBase64Address(q);
-            const rw = await pool.query(
-                `SELECT COUNT(DISTINCT tx_hash)::int AS tx_count FROM contract_events WHERE from_address = $1`, [b64],
-            );
-            if ((rw.rows[0]?.tx_count ?? 0) > 0) {
-                results.push({ type: 'address', id: q, description: `Address ${q.slice(0, 14)}…${q.slice(-6)}`, extra: { txs: rw.rows[0].tx_count } });
+            if (b64) {
+                const rw = await pool.query(
+                    `SELECT COUNT(DISTINCT tx_hash)::int AS tx_count FROM contract_events WHERE from_address = $1`, [b64],
+                );
+                if ((rw.rows[0]?.tx_count ?? 0) > 0) {
+                    results.push({ type: 'address', id: q, description: `Address ${q.slice(0, 14)}…${q.slice(-6)}`, extra: { txs: rw.rows[0].tx_count } });
+                } else if (results.length === 0) {
+                    // Show even if no events — let address page handle it
+                    results.push({ type: 'address', id: q, description: `Address ${q.slice(0, 14)}…${q.slice(-6)}` });
+                }
             } else if (results.length === 0) {
-                // Show even if no events — let address page handle it
                 results.push({ type: 'address', id: q, description: `Address ${q.slice(0, 14)}…${q.slice(-6)}` });
             }
         }
