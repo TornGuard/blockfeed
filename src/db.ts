@@ -465,7 +465,9 @@ function bech32ToBytes(addr: string): Buffer | null {
             bits += 5;
             if (bits >= 8) { bits -= 8; bytes.push((acc >> bits) & 0xff); }
         }
-        return bytes.length === 32 ? Buffer.from(bytes) : null;
+        // Accept 20-byte (P2WPKH) and 32-byte (P2TR/OPNet) payloads
+        if (bytes.length === 32 || bytes.length === 20) return Buffer.from(bytes);
+        return null;
     } catch {
         return null;
     }
@@ -476,7 +478,7 @@ function bech32ToBytes(addr: string): Buffer | null {
  * Accepts: bech32 opt1/bc1*, legacy BTC 1.../3..., 64-char hex, or base64 as-is.
  */
 function toBase64Address(address: string): string {
-    if (/^(opt1|bc1)/i.test(address)) {
+    if (/^(opt1|bc1|tb1)/i.test(address)) {
         const bytes = bech32ToBytes(address);
         if (bytes) return bytes.toString('base64');
     }
@@ -495,7 +497,7 @@ function toBase64Address(address: string): string {
  * Returns null if the address cannot be decoded.
  */
 function toHexAddress(address: string): string | null {
-    if (/^(opt1|bc1)/i.test(address)) {
+    if (/^(opt1|bc1|tb1)/i.test(address)) {
         const bytes = bech32ToBytes(address);
         if (bytes) return '0x' + bytes.toString('hex');
     }
@@ -622,7 +624,7 @@ export async function globalSearch(query: string): Promise<{ type: string; id: s
     }
 
     // ── Address / contract (bech32 opt1/bc1* OR legacy 1.../3... OR 0x-hex) ────
-    const isBech32    = /^(opt1|bc1)/i.test(q) && q.length > 10;
+    const isBech32    = /^(opt1|bc1|tb1)/i.test(q) && q.length > 10;
     const isLegacyBtc = /^[13][a-zA-Z0-9]{25,34}$/.test(q);
     const is0xHex     = /^0x[0-9a-f]{40,64}$/i.test(q);
     const isAddress   = isBech32 || isLegacyBtc || is0xHex;
