@@ -12,7 +12,9 @@
 import crypto from 'crypto';
 import { pool } from './db.js';
 
-const OPNET_RPC = process.env['OPNET_RPC_URL'] ?? 'https://testnet.opnet.org/api/v1/json-rpc';
+// Normalize to full JSON-RPC endpoint — indexer stores base URL without path
+const _rpcBase  = (process.env['OPNET_RPC_URL'] ?? 'https://testnet.opnet.org').replace(/\/api\/v1\/json-rpc$/, '');
+const OPNET_RPC = `${_rpcBase}/api/v1/json-rpc`;
 const TIMEOUT   = 12_000;
 
 // ── Selector computation ──────────────────────────────────────────────────────
