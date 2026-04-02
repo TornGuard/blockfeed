@@ -15,7 +15,7 @@ import { pool } from './db.js';
 // Normalize to full JSON-RPC endpoint — indexer stores base URL without path
 const _rpcBase  = (process.env['OPNET_RPC_URL'] ?? 'https://testnet.opnet.org').replace(/\/api\/v1\/json-rpc$/, '');
 const OPNET_RPC = `${_rpcBase}/api/v1/json-rpc`;
-const TIMEOUT   = 12_000;
+const TIMEOUT   = 5_000;
 
 // ── Selector computation ──────────────────────────────────────────────────────
 
@@ -147,22 +147,26 @@ export async function fetchAndStoreTokenMetadata(contractAddress: string): Promi
  * Runs at startup with concurrency limiting so it doesn't hammer the RPC.
  */
 export async function backfillTokenMetadata(): Promise<void> {
+    // Order by most active contracts first so popular tokens appear immediately
     const { rows } = await pool.query<{ contract_address: string }>(
-        `SELECT contract_address FROM tokens
-         WHERE fetch_status IN ('pending', 'failed')
-         ORDER BY contract_address`,
+        `SELECT t.contract_address
+         FROM tokens t
+         LEFT JOIN (
+             SELECT contract_address, COUNT(*) AS event_count
+             FROM contract_events GROUP BY contract_address
+         ) ce ON ce.contract_address = t.contract_address
+         WHERE t.fetch_status IN ('pending', 'failed')
+         ORDER BY COALESCE(ce.event_count, 0) DESC`,
     );
 
     if (rows.length === 0) return;
 
     console.log(`[TokenFetcher] Backfilling ${rows.length} pending tokens…`);
 
-    const CONCURRENCY = 5;
+    const CONCURRENCY = 20;
     for (let i = 0; i < rows.length; i += CONCURRENCY) {
         const batch = rows.slice(i, i + CONCURRENCY);
         await Promise.allSettled(batch.map(r => fetchAndStoreTokenMetadata(r.contract_address)));
-        // Small delay between batches to avoid rate-limiting
-        if (i + CONCURRENCY < rows.length) await new Promise(r => setTimeout(r, 300));
     }
 
     const { rows: fetched } = await pool.query(
