@@ -134,7 +134,8 @@ export async function fetchAndStoreTokenMetadata(contractAddress: string): Promi
              WHERE contract_address = $5`,
             [meta.name ?? null, meta.symbol ?? null, meta.decimals ?? null, meta.totalSupply ?? null, contractAddress],
         );
-    } catch {
+    } catch (err) {
+        console.error(`[TokenFetcher] Error fetching ${contractAddress.slice(0, 12)}…: ${(err as Error).message}`);
         await pool.query(
             `UPDATE tokens SET fetch_status = 'failed', fetched_at = NOW() WHERE contract_address = $1`,
             [contractAddress],
@@ -156,6 +157,9 @@ export async function backfillTokenMetadata(): Promise<void> {
     `);
     if (seeded && seeded > 0) console.log(`[TokenFetcher] Seeded ${seeded} missing contracts into tokens table`);
 
+    // Reset previous failed attempts so they retry with the fixed fetcher
+    await pool.query(`UPDATE tokens SET fetch_status = 'pending' WHERE fetch_status = 'failed'`);
+
     // Order by most active contracts first so popular tokens appear immediately
     const { rows } = await pool.query<{ contract_address: string }>(
         `SELECT t.contract_address
@@ -172,7 +176,7 @@ export async function backfillTokenMetadata(): Promise<void> {
 
     console.log(`[TokenFetcher] Backfilling ${rows.length} pending tokens…`);
 
-    const CONCURRENCY = 20;
+    const CONCURRENCY = 5;
     for (let i = 0; i < rows.length; i += CONCURRENCY) {
         const batch = rows.slice(i, i + CONCURRENCY);
         await Promise.allSettled(batch.map(r => fetchAndStoreTokenMetadata(r.contract_address)));
