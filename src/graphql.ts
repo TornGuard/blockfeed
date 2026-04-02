@@ -267,12 +267,24 @@ const schema = buildSchema(`
 
 // ── Resolvers ─────────────────────────────────────────────────────────────────
 
-/** Map raw DB fee row → GraphQL Fee (divide scaled value by 100) */
+/** Convert any Date/timestamp value to ISO 8601 string */
+function toISO(val: unknown): string | null {
+    if (val == null) return null;
+    if (val instanceof Date) return val.toISOString();
+    if (typeof val === 'string' && val.includes('T')) return val;
+    if (typeof val === 'number' || (typeof val === 'string' && /^\d+$/.test(val))) {
+        return new Date(Number(val)).toISOString();
+    }
+    return String(val);
+}
+
+/** Map raw DB fee row → GraphQL Fee (divide scaled value by 100, normalize timestamps) */
 function mapFee(row: Record<string, unknown> | null) {
     if (!row) return null;
     return {
         ...row,
-        fee_rate: row.median_fee_scaled != null ? (row.median_fee_scaled as number) / 100 : null,
+        fee_rate:     row.median_fee_scaled != null ? (row.median_fee_scaled as number) / 100 : null,
+        submitted_at: toISO(row.submitted_at),
     };
 }
 
@@ -291,14 +303,18 @@ const rootValue = {
     chainStats: () => getActivityStats(),
 
     // ── Events ───────────────────────────────────────────────────────────────
-    recentEvents: ({ limit, type, cursor }: { limit?: number; type?: string; cursor?: number }) =>
-        getRecentEvents(limit ?? 20, type ?? null, cursor ?? null),
+    recentEvents: async ({ limit, type, cursor }: { limit?: number; type?: string; cursor?: number }) => {
+        const rows = await getRecentEvents(limit ?? 20, type ?? null, cursor ?? null);
+        return rows.map(r => ({ ...r, ts: toISO(r.ts) }));
+    },
     eventTypes: () => getEventTypeSummary(),
 
     // ── Contracts ─────────────────────────────────────────────────────────────
     topContracts: ({ limit }: { limit?: number }) => getTopContracts(limit ?? 10),
-    contractEvents: ({ address, limit, type, cursor }: { address: string; limit?: number; type?: string; cursor?: number }) =>
-        getContractEvents(address, limit ?? 25, type ?? null, cursor ?? null),
+    contractEvents: async ({ address, limit, type, cursor }: { address: string; limit?: number; type?: string; cursor?: number }) => {
+        const rows = await getContractEvents(address, limit ?? 25, type ?? null, cursor ?? null);
+        return rows.map(r => ({ ...r, ts: toISO(r.ts) }));
+    },
     contractStats: ({ address }: { address: string }) => getContractStats(address),
 
     // ── Tokens ───────────────────────────────────────────────────────────────
@@ -309,21 +325,36 @@ const rootValue = {
 
     // ── Address ───────────────────────────────────────────────────────────────
     address: ({ address }: { address: string }) => getAddressOverview(address),
-    addressTxs: ({ address, limit, cursor }: { address: string; limit?: number; cursor?: number }) =>
-        getAddressTxs(address, limit ?? 25, cursor ?? null),
+    addressTxs: async ({ address, limit, cursor }: { address: string; limit?: number; cursor?: number }) => {
+        const rows = await getAddressTxs(address, limit ?? 25, cursor ?? null);
+        return rows.map(r => ({ ...r, ts: toISO(r.ts) }));
+    },
     addressTokens: ({ address, limit }: { address: string; limit?: number }) =>
         getAddressTokenActivity(address, limit ?? 20),
 
     // ── Transactions ──────────────────────────────────────────────────────────
-    tx: ({ hash }: { hash: string }) => getTxByHash(hash),
+    tx: async ({ hash }: { hash: string }) => {
+        const rows = await getTxByHash(hash);
+        return rows.map(r => ({ ...r, ts: toISO(r.ts) }));
+    },
 
     // ── Oracle ────────────────────────────────────────────────────────────────
-    oraclePrice: ({ symbol }: { symbol?: string }) => getLatestOraclePrice(symbol ?? 'BTC/USD'),
-    oraclePrices: () => getAllLatestOraclePrices(),
-    oraclePriceHistory: ({ symbol, limit }: { symbol: string; limit?: number }) =>
-        getOraclePriceHistory(symbol, limit ?? 100),
-    ohlcv: ({ symbol, interval, limit }: { symbol: string; interval?: string; limit?: number }) =>
-        getOhlcv(symbol, interval ?? '1h', limit ?? 100),
+    oraclePrice: async ({ symbol }: { symbol?: string }) => {
+        const r = await getLatestOraclePrice(symbol ?? 'BTC/USD');
+        return r ? { ...r, captured_at: toISO(r.captured_at) } : null;
+    },
+    oraclePrices: async () => {
+        const rows = await getAllLatestOraclePrices();
+        return rows.map(r => ({ ...r, captured_at: toISO(r.captured_at) }));
+    },
+    oraclePriceHistory: async ({ symbol, limit }: { symbol: string; limit?: number }) => {
+        const rows = await getOraclePriceHistory(symbol, limit ?? 100);
+        return rows.map(r => ({ ...r, captured_at: toISO(r.captured_at) }));
+    },
+    ohlcv: async ({ symbol, interval, limit }: { symbol: string; interval?: string; limit?: number }) => {
+        const rows = await getOhlcv(symbol, interval ?? '1h', limit ?? 100);
+        return (rows as Record<string, unknown>[]).map(r => ({ ...r, ts: toISO(r.ts) }));
+    },
 
     // ── Analytics ─────────────────────────────────────────────────────────────
     volumeAnalytics: ({ contract }: { contract?: string }) => getVolumeAnalytics(contract ?? null),
