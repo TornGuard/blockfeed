@@ -386,11 +386,32 @@ const GRAPHIQL_HTML = `<!DOCTYPE html>
   <script>
     const fetcher = GraphiQL.createFetcher({ url: '/graphql' });
     const defaultQuery = \`# BlockFeed GraphQL Playground
-# Try a query:
+# Tip: use Ctrl+Space for field autocomplete, Docs explorer on the right for full schema.
+
 {
-  latestFee { fee_rate mempool_count submitted_at }
-  oraclePrices { symbol price confidence captured_at }
-  trendingTokens(limit: 5) { symbol transfers_24h unique_senders }
+  latestFee {
+    fee_rate
+    mempool_count
+    submitted_at
+  }
+  oraclePrice(symbol: "BTC/USD") {
+    symbol
+    price
+    confidence
+    captured_at
+  }
+  chainStats {
+    total_blocks
+    total_events
+    total_contracts
+    latest_block
+  }
+  trendingTokens(limit: 5) {
+    contract_address
+    symbol
+    transfers_24h
+    unique_senders
+  }
 }
 \`;
     ReactDOM.createRoot(document.getElementById('app')).render(
