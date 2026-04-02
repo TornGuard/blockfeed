@@ -136,6 +136,13 @@ export async function ensureSchema(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_bets_status ON bets (status);
     `);
 
+    // ── Migrations (idempotent column additions for existing deployments) ────
+    await pool.query(`
+        ALTER TABLE tokens
+            ADD COLUMN IF NOT EXISTS fetch_status TEXT DEFAULT 'pending',
+            ADD COLUMN IF NOT EXISTS fetched_at   TIMESTAMPTZ;
+    `);
+
     console.log('[DB] Schema ready');
 }
 
