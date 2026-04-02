@@ -13,6 +13,7 @@ import { Config } from './config.js';
 import { pool, ensureSchema } from './db.js';
 import { startFeed } from './feed.js';
 import { registerRoutes } from './router.js';
+import { backfillTokenMetadata } from './token-fetcher.js';
 import type { WorkerMsg } from './types.js';
 import { broadcast, broadcastBlock } from './feed.js';
 import { setGauge, incCounter } from './metrics.js';
@@ -98,6 +99,9 @@ async function boot(): Promise<void> {
     startWorker(path.join(__dirname, '../workers/fee-worker.js'),     'Fee');
 
     await app.listen(Config.port);
+
+    // Backfill token metadata for all pending contracts (non-blocking)
+    backfillTokenMetadata().catch(err => console.error('[TokenFetcher] Backfill error:', err.message));
 
     setGauge('process_uptime_seconds', 0);
     setInterval(() => setGauge('process_uptime_seconds', Math.floor(process.uptime())), 10_000);
