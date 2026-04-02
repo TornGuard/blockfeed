@@ -147,6 +147,15 @@ export async function fetchAndStoreTokenMetadata(contractAddress: string): Promi
  * Runs at startup with concurrency limiting so it doesn't hammer the RPC.
  */
 export async function backfillTokenMetadata(): Promise<void> {
+    // Seed tokens table from contract_events — contracts indexed before upsertToken
+    // was added to the indexer won't exist in tokens yet
+    const { rowCount: seeded } = await pool.query(`
+        INSERT INTO tokens (contract_address)
+        SELECT DISTINCT contract_address FROM contract_events
+        ON CONFLICT (contract_address) DO NOTHING
+    `);
+    if (seeded && seeded > 0) console.log(`[TokenFetcher] Seeded ${seeded} missing contracts into tokens table`);
+
     // Order by most active contracts first so popular tokens appear immediately
     const { rows } = await pool.query<{ contract_address: string }>(
         `SELECT t.contract_address
