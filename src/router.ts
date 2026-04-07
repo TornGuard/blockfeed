@@ -436,8 +436,9 @@ export function registerRoutes(app: HyperExpress.Server): void {
             const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
             const row = await createApiKey(keyHash, label, 1000);
             res.status(201).json({ ok: true, key: rawKey, data: { id: row.id, label: row.label, created_at: row.created_at } });
-        } catch {
-            res.status(500).json({ error: 'Failed to create key' });
+        } catch (err) {
+            console.error('[/v1/keys] Error:', (err as Error).message);
+            res.status(500).json({ error: 'Failed to create key', detail: (err as Error).message });
         }
     });
 
