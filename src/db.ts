@@ -167,6 +167,28 @@ export async function ensureSchema(): Promise<void> {
         END $$;
         CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys (key_hash);
     `);
+    // Recreate webhooks with correct schema if key_id column is missing
+    await pool.query(`
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='webhooks' AND column_name='key_id')
+            THEN
+                DROP TABLE IF EXISTS webhooks CASCADE;
+                CREATE TABLE webhooks (
+                    id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+                    key_id           UUID        NOT NULL,
+                    url              TEXT        NOT NULL,
+                    events           TEXT[]      NOT NULL,
+                    contract_filter  TEXT,
+                    active           BOOLEAN     NOT NULL DEFAULT TRUE,
+                    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    delivery_count   INTEGER     NOT NULL DEFAULT 0,
+                    last_delivery_at TIMESTAMPTZ,
+                    last_status_code INTEGER,
+                    last_event_id    BIGINT      NOT NULL DEFAULT 0
+                );
+            END IF;
+        END $$;
+    `);
 
     console.log('[DB] Schema ready');
 }
