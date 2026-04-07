@@ -151,7 +151,19 @@ export function registerAuthRoutes(app: HyperExpress.Server): void {
             }
 
             // Verify signature first (before consuming nonce to avoid timing attacks)
+            const message = buildSignMessage(nonce);
+            const sigBuf = Buffer.from(signature, 'base64');
+            const isTaproot = /^(bc1p|tb1p|opt1)/i.test(wallet);
+            console.log('[auth/verify] wallet:', wallet);
+            console.log('[auth/verify] isTaproot:', isTaproot);
+            console.log('[auth/verify] message:', JSON.stringify(message));
+            console.log('[auth/verify] sig base64 len:', signature.length, 'buf len:', sigBuf.length);
+            console.log('[auth/verify] sig first bytes:', sigBuf.slice(0, 8).toString('hex'));
+            let bip137Result = false;
+            try { bip137Result = bitcoinMessage.verify(message, wallet, signature, undefined, true); } catch (e: any) { console.log('[auth/verify] bip137 error:', e.message); }
+            console.log('[auth/verify] bip137 result:', bip137Result);
             const valid = verifyBitcoinSig(wallet, nonce, signature);
+            console.log('[auth/verify] final result:', valid);
             if (!valid) {
                 res.status(401).json({ error: 'Invalid signature' });
                 return;
