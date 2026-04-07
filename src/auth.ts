@@ -16,6 +16,9 @@
 import crypto from 'crypto';
 import HyperExpress from '@btc-vision/hyper-express';
 import bitcoinMessage from 'bitcoinjs-message';
+import { schnorr } from '@noble/curves/secp256k1';
+import { sha256 } from '@noble/hashes/sha256';
+import { bech32m } from 'bech32';
 import {
     upsertNonce, consumeNonce, upsertUser,
     createSession, lookupSession, deleteSession,
@@ -37,11 +40,67 @@ function generateToken(): string {
     return crypto.randomBytes(32).toString('hex');
 }
 
-/** Verify a Bitcoin message signature (BIP-137 / UniSat format) */
+/**
+ * BIP-322 tagged hash for message signing.
+ * tag = "BIP0322-signed-message"
+ * hash = SHA256(SHA256(tag) || SHA256(tag) || msg)
+ */
+function bip322MessageHash(message: string): Uint8Array {
+    const tag = Buffer.from('BIP0322-signed-message', 'utf8');
+    const tagHash = sha256(tag);
+    const msgBytes = Buffer.from(message, 'utf8');
+    return sha256(Buffer.concat([tagHash, tagHash, msgBytes]));
+}
+
+/**
+ * Verify a BIP-322 simple signature for a Taproot (P2TR) address.
+ * UniSat encodes the witness as: [01][40][64-byte schnorr sig]
+ * The address encodes the x-only pubkey via bech32m.
+ */
+function verifyTaprootSig(address: string, message: string, sigBase64: string): boolean {
+    try {
+        const sigBuf = Buffer.from(sigBase64, 'base64');
+
+        // BIP-322 simple witness format: varint(count) + varint(len) + bytes
+        // Minimum: 01 40 <64 bytes> = 66 bytes
+        // Also handle raw 64-byte Schnorr sig (some wallets skip the witness wrapper)
+        let schnorrSig: Uint8Array;
+        if (sigBuf.length === 64) {
+            schnorrSig = sigBuf;
+        } else if (sigBuf.length >= 66 && sigBuf[0] === 0x01 && sigBuf[1] === 0x40) {
+            schnorrSig = sigBuf.slice(2, 66);
+        } else if (sigBuf.length >= 67 && sigBuf[1] === 0x01 && sigBuf[2] === 0x40) {
+            // one extra byte prefix (e.g. 0x00 from some encodings)
+            schnorrSig = sigBuf.slice(3, 67);
+        } else {
+            return false;
+        }
+
+        // Decode bech32m address → x-only pubkey (32 bytes)
+        const decoded = bech32m.decode(address);
+        const words = decoded.words;
+        // First word is witness version (1 for Taproot), rest is the program
+        const pubkeyBytes = new Uint8Array(bech32m.fromWords(words.slice(1)));
+        if (pubkeyBytes.length !== 32) return false;
+
+        const msgHash = bip322MessageHash(message);
+        return schnorr.verify(schnorrSig, msgHash, pubkeyBytes);
+    } catch {
+        return false;
+    }
+}
+
+/** Verify a Bitcoin message signature — handles BIP-137 (legacy/segwit) and BIP-322 (Taproot) */
 function verifyBitcoinSig(address: string, nonce: string, signature: string): boolean {
     const message = buildSignMessage(nonce);
+    const isTaproot = /^(bc1p|tb1p|opt1)/i.test(address);
+
+    if (isTaproot) {
+        return verifyTaprootSig(address, message, signature);
+    }
+
+    // BIP-137 ECDSA for legacy / P2SH / P2WPKH
     try {
-        // Try standard BIP-137 verification
         return bitcoinMessage.verify(message, address, signature, undefined, true);
     } catch {
         try {
