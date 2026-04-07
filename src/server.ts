@@ -94,9 +94,10 @@ async function boot(): Promise<void> {
     await ensureSchema();
 
     // Start workers
-    startWorker(path.join(__dirname, '../workers/indexer-worker.js'), 'Indexer');
-    startWorker(path.join(__dirname, '../workers/oracle-worker.js'),  'Oracle');
-    startWorker(path.join(__dirname, '../workers/fee-worker.js'),     'Fee');
+    startWorker(path.join(__dirname, '../workers/indexer-worker.js'),  'Indexer');
+    startWorker(path.join(__dirname, '../workers/oracle-worker.js'),   'Oracle');
+    startWorker(path.join(__dirname, '../workers/fee-worker.js'),      'Fee');
+    startWorker(path.join(__dirname, '../workers/webhook-worker.js'),  'Webhook');
 
     await app.listen(Config.port);
 

@@ -104,7 +104,8 @@ export async function ensureSchema(): Promise<void> {
             created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             delivery_count  INTEGER     NOT NULL DEFAULT 0,
             last_delivery_at TIMESTAMPTZ,
-            last_status_code INTEGER
+            last_status_code INTEGER,
+            last_event_id   BIGINT      NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS api_keys (
@@ -141,6 +142,8 @@ export async function ensureSchema(): Promise<void> {
         ALTER TABLE tokens
             ADD COLUMN IF NOT EXISTS fetch_status TEXT DEFAULT 'pending',
             ADD COLUMN IF NOT EXISTS fetched_at   TIMESTAMPTZ;
+        ALTER TABLE webhooks
+            ADD COLUMN IF NOT EXISTS last_event_id BIGINT NOT NULL DEFAULT 0;
     `);
 
     console.log('[DB] Schema ready');
@@ -761,4 +764,25 @@ export async function toggleWebhook(keyId: string, id: string, active: boolean):
 export async function countWebhooks(keyId: string): Promise<number> {
     const r = await pool.query<{ n: string }>(`SELECT COUNT(*) AS n FROM webhooks WHERE key_id = $1`, [keyId]);
     return Number(r.rows[0]?.n ?? 0);
+}
+
+export async function getActiveWebhooks(): Promise<(DbWebhook & { key_id: string; last_event_id: number })[]> {
+    const r = await pool.query<DbWebhook & { key_id: string; last_event_id: number }>(
+        `SELECT * FROM webhooks WHERE active = true`,
+    );
+    return r.rows;
+}
+
+export async function updateWebhookDelivery(
+    id: string, statusCode: number, lastEventId: number,
+): Promise<void> {
+    await pool.query(
+        `UPDATE webhooks
+         SET delivery_count   = delivery_count + 1,
+             last_delivery_at = NOW(),
+             last_status_code = $1,
+             last_event_id    = GREATEST(last_event_id, $2)
+         WHERE id = $3`,
+        [statusCode, lastEventId, id],
+    );
 }

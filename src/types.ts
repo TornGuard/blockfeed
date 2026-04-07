@@ -55,6 +55,7 @@ export interface DbOraclePrice {
 
 export interface DbWebhook {
     id: string;
+    key_id: string;
     url: string;
     events: string[];
     contract_filter: string | null;
@@ -63,6 +64,7 @@ export interface DbWebhook {
     delivery_count: number;
     last_delivery_at: Date | null;
     last_status_code: number | null;
+    last_event_id: number;
 }
 
 export interface DbApiKey {

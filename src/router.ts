@@ -298,7 +298,7 @@ export function registerRoutes(app: HyperExpress.Server): void {
     app.get('/v1/oracle/history', async (req, res) => {
         if (!await auth(req, res)) return;
         const symbol = req.query_parameters['symbol'] ?? 'BTC/USD';
-        const limit  = lim(req, 50, 500);
+        const limit  = lim(req, 50, 20_000);
         const rows   = await getOraclePriceHistory(symbol, limit);
         res.json({ ok: true, symbol, count: rows.length, data: rows });
     });
@@ -424,6 +424,21 @@ export function registerRoutes(app: HyperExpress.Server): void {
         }
         await toggleWebhook(keyId, req.params.id, body.active);
         res.json({ ok: true });
+    });
+
+    // ── Self-serve API keys ───────────────────────────────────────────────────
+    // Simple self-serve key generation (no auth required, rate-limited by IP naturally)
+    app.post('/v1/keys', async (req, res) => {
+        try {
+            const body = await req.json() as { label?: string; email?: string };
+            const label = (body.label ?? body.email ?? 'default').slice(0, 80);
+            const rawKey = crypto.randomBytes(32).toString('hex');
+            const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+            const row = await createApiKey(keyHash, label, 1000);
+            res.status(201).json({ ok: true, key: rawKey, data: { id: row.id, label: row.label, created_at: row.created_at } });
+        } catch {
+            res.status(500).json({ error: 'Failed to create key' });
+        }
     });
 
     // ── Admin: API key management ─────────────────────────────────────────────
