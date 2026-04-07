@@ -387,24 +387,34 @@ export function registerRoutes(app: HyperExpress.Server): void {
 
     // ── Webhooks ──────────────────────────────────────────────────────────────
     app.post('/v1/webhooks', async (req, res) => {
-        const keyId = await verifyApiKey(req, res);
-        if (!keyId) return;
-        const body = await req.json() as { url?: string; events?: string[]; contract?: string };
-        if (!body.url || !body.events?.length) {
-            res.status(400).json({ error: 'url and events required' });
-            return;
+        try {
+            const keyId = await verifyApiKey(req, res);
+            if (!keyId) return;
+            const body = await req.json() as { url?: string; events?: string[]; contract?: string };
+            if (!body.url || !body.events?.length) {
+                res.status(400).json({ error: 'url and events required' });
+                return;
+            }
+            const count = await countWebhooks(keyId);
+            if (count >= 20) { res.status(429).json({ error: 'Max 20 webhooks per key' }); return; }
+            const hook = await createWebhook(keyId, body.url, body.events, body.contract ?? null);
+            res.status(201).json({ ok: true, data: hook });
+        } catch (err) {
+            console.error('[POST /v1/webhooks]', (err as Error).message);
+            res.status(500).json({ error: 'Internal server error', detail: (err as Error).message });
         }
-        const count = await countWebhooks(keyId);
-        if (count >= 20) { res.status(429).json({ error: 'Max 20 webhooks per key' }); return; }
-        const hook = await createWebhook(keyId, body.url, body.events, body.contract ?? null);
-        res.status(201).json({ ok: true, data: hook });
     });
 
     app.get('/v1/webhooks', async (req, res) => {
-        const keyId = await verifyApiKey(req, res);
-        if (!keyId) return;
-        const hooks = await listWebhooks(keyId);
-        res.json({ ok: true, count: hooks.length, data: hooks });
+        try {
+            const keyId = await verifyApiKey(req, res);
+            if (!keyId) return;
+            const hooks = await listWebhooks(keyId);
+            res.json({ ok: true, count: hooks.length, data: hooks });
+        } catch (err) {
+            console.error('[GET /v1/webhooks]', (err as Error).message);
+            res.status(500).json({ error: 'Internal server error', detail: (err as Error).message });
+        }
     });
 
     app.delete('/v1/webhooks/:id', async (req, res) => {
