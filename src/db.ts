@@ -113,8 +113,31 @@ export async function ensureSchema(): Promise<void> {
             key_hash    TEXT    NOT NULL UNIQUE,
             label       TEXT    NOT NULL DEFAULT 'default',
             rate_limit  INTEGER NOT NULL DEFAULT 100,
+            user_id     UUID,
             created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+
+        CREATE TABLE IF NOT EXISTS users (
+            id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            wallet_address TEXT        NOT NULL UNIQUE,
+            created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS auth_nonces (
+            wallet_address TEXT        PRIMARY KEY,
+            nonce          TEXT        NOT NULL,
+            expires_at     TIMESTAMPTZ NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id      UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash   TEXT        NOT NULL UNIQUE,
+            expires_at   TIMESTAMPTZ NOT NULL,
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions (token_hash);
+        CREATE INDEX IF NOT EXISTS idx_sessions_user  ON sessions (user_id);
 
         CREATE TABLE IF NOT EXISTS bets (
             bet_id            INTEGER PRIMARY KEY,
@@ -770,12 +793,90 @@ export async function lookupApiKey(keyHash: string): Promise<DbApiKey | null> {
     return r.rows[0] ?? null;
 }
 
-export async function createApiKey(keyHash: string, label: string, rateLimit: number): Promise<DbApiKey> {
+export async function createApiKey(keyHash: string, label: string, rateLimit: number, userId?: string): Promise<DbApiKey> {
     const r = await pool.query<DbApiKey>(
-        `INSERT INTO api_keys (key_hash, label, rate_limit) VALUES ($1, $2, $3) RETURNING *`,
-        [keyHash, label, rateLimit],
+        `INSERT INTO api_keys (key_hash, label, rate_limit, user_id) VALUES ($1, $2, $3, $4) RETURNING *`,
+        [keyHash, label, rateLimit, userId ?? null],
     );
     return r.rows[0]!;
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+export async function upsertNonce(walletAddress: string, nonce: string): Promise<void> {
+    await pool.query(
+        `INSERT INTO auth_nonces (wallet_address, nonce, expires_at)
+         VALUES ($1, $2, NOW() + INTERVAL '5 minutes')
+         ON CONFLICT (wallet_address) DO UPDATE
+           SET nonce = $2, expires_at = NOW() + INTERVAL '5 minutes'`,
+        [walletAddress, nonce],
+    );
+}
+
+export async function consumeNonce(walletAddress: string, nonce: string): Promise<boolean> {
+    const r = await pool.query(
+        `DELETE FROM auth_nonces
+         WHERE wallet_address = $1 AND nonce = $2 AND expires_at > NOW()
+         RETURNING wallet_address`,
+        [walletAddress, nonce],
+    );
+    return (r.rowCount ?? 0) > 0;
+}
+
+export async function upsertUser(walletAddress: string): Promise<{ id: string; wallet_address: string; created_at: Date }> {
+    const r = await pool.query<{ id: string; wallet_address: string; created_at: Date }>(
+        `INSERT INTO users (wallet_address) VALUES ($1)
+         ON CONFLICT (wallet_address) DO UPDATE SET wallet_address = EXCLUDED.wallet_address
+         RETURNING *`,
+        [walletAddress],
+    );
+    return r.rows[0]!;
+}
+
+export async function createSession(userId: string, tokenHash: string): Promise<{ id: string; expires_at: Date }> {
+    const r = await pool.query<{ id: string; expires_at: Date }>(
+        `INSERT INTO sessions (user_id, token_hash, expires_at)
+         VALUES ($1, $2, NOW() + INTERVAL '30 days')
+         RETURNING id, expires_at`,
+        [userId, tokenHash],
+    );
+    return r.rows[0]!;
+}
+
+export async function lookupSession(tokenHash: string): Promise<{ user_id: string; wallet_address: string; api_key_hash: string | null } | null> {
+    const r = await pool.query<{ user_id: string; wallet_address: string; api_key_hash: string | null }>(
+        `SELECT s.user_id, u.wallet_address, k.key_hash AS api_key_hash
+         FROM sessions s
+         JOIN users u ON u.id = s.user_id
+         LEFT JOIN api_keys k ON k.user_id = s.user_id
+         WHERE s.token_hash = $1 AND s.expires_at > NOW()
+         ORDER BY k.created_at DESC
+         LIMIT 1`,
+        [tokenHash],
+    );
+    return r.rows[0] ?? null;
+}
+
+export async function deleteSession(tokenHash: string): Promise<void> {
+    await pool.query(`DELETE FROM sessions WHERE token_hash = $1`, [tokenHash]);
+}
+
+export async function getOrCreateUserApiKey(userId: string, walletAddress: string): Promise<{ rawKey: string; keyHash: string }> {
+    // Return existing key if present
+    const existing = await pool.query<{ key_hash: string }>(
+        `SELECT key_hash FROM api_keys WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1`,
+        [userId],
+    );
+    if (existing.rows[0]) {
+        // We can't return the raw key (it's hashed), so generate a new one linked to the account
+        // If there's already a key, just return the hash so the session lookup can use it
+        return { rawKey: '', keyHash: existing.rows[0].key_hash };
+    }
+    // Create new key
+    const crypto = await import('crypto');
+    const rawKey = crypto.randomBytes(32).toString('hex');
+    const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+    await createApiKey(keyHash, `wallet:${walletAddress.slice(0, 12)}`, 1000, userId);
+    return { rawKey, keyHash };
 }
 
 export async function listApiKeys(): Promise<DbApiKey[]> {
@@ -784,29 +885,49 @@ export async function listApiKeys(): Promise<DbApiKey[]> {
 }
 
 // ── Webhook management ────────────────────────────────────────────────────────
-export async function createWebhook(keyId: string, url: string, events: string[], contractFilter: string | null): Promise<DbWebhook> {
+export async function createWebhook(ownerId: string, url: string, events: string[], contractFilter: string | null): Promise<DbWebhook> {
     const r = await pool.query<DbWebhook>(
         `INSERT INTO webhooks (key_id, url, events, contract_filter) VALUES ($1, $2, $3, $4) RETURNING *`,
-        [keyId, url, events, contractFilter],
+        [ownerId, url, events, contractFilter],
     );
     return r.rows[0]!;
 }
 
-export async function listWebhooks(keyId: string): Promise<DbWebhook[]> {
-    const r = await pool.query<DbWebhook>(`SELECT * FROM webhooks WHERE key_id = $1 ORDER BY created_at DESC`, [keyId]);
+export async function listWebhooks(ownerId: string): Promise<DbWebhook[]> {
+    // ownerId may be api_keys.id or users.id — match either
+    const r = await pool.query<DbWebhook>(
+        `SELECT w.* FROM webhooks w
+         LEFT JOIN api_keys k ON k.id = w.key_id
+         WHERE w.key_id = $1 OR k.user_id = $1
+         ORDER BY w.created_at DESC`,
+        [ownerId],
+    );
     return r.rows;
 }
 
-export async function deleteWebhook(keyId: string, id: string): Promise<void> {
-    await pool.query(`DELETE FROM webhooks WHERE id = $1 AND key_id = $2`, [id, keyId]);
+export async function deleteWebhook(ownerId: string, id: string): Promise<void> {
+    await pool.query(
+        `DELETE FROM webhooks w USING api_keys k
+         WHERE w.id = $1 AND (w.key_id = $2 OR k.user_id = $2)`,
+        [id, ownerId],
+    );
 }
 
-export async function toggleWebhook(keyId: string, id: string, active: boolean): Promise<void> {
-    await pool.query(`UPDATE webhooks SET active = $1 WHERE id = $2 AND key_id = $3`, [active, id, keyId]);
+export async function toggleWebhook(ownerId: string, id: string, active: boolean): Promise<void> {
+    await pool.query(
+        `UPDATE webhooks SET active = $1
+         WHERE id = $2 AND (key_id = $3 OR key_id IN (SELECT id FROM api_keys WHERE user_id = $3))`,
+        [active, id, ownerId],
+    );
 }
 
-export async function countWebhooks(keyId: string): Promise<number> {
-    const r = await pool.query<{ n: string }>(`SELECT COUNT(*) AS n FROM webhooks WHERE key_id = $1`, [keyId]);
+export async function countWebhooks(ownerId: string): Promise<number> {
+    const r = await pool.query<{ n: string }>(
+        `SELECT COUNT(*) AS n FROM webhooks w
+         LEFT JOIN api_keys k ON k.id = w.key_id
+         WHERE w.key_id = $1 OR k.user_id = $1`,
+        [ownerId],
+    );
     return Number(r.rows[0]?.n ?? 0);
 }
 

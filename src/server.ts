@@ -13,6 +13,7 @@ import { Config } from './config.js';
 import { pool, ensureSchema } from './db.js';
 import { startFeed } from './feed.js';
 import { registerRoutes } from './router.js';
+import { registerAuthRoutes } from './auth.js';
 import { backfillTokenMetadata } from './token-fetcher.js';
 import type { WorkerMsg } from './types.js';
 import { broadcast, broadcastBlock } from './feed.js';
@@ -56,6 +57,7 @@ app.use((req, res, next) => {
 
 // ── Register all REST routes + WebSocket ──────────────────────────────────────
 registerRoutes(app);
+registerAuthRoutes(app);
 startFeed(app.uws_instance);
 
 // ── Worker: Indexer ───────────────────────────────────────────────────────────

@@ -9,7 +9,7 @@
 import crypto from 'crypto';
 import HyperExpress from '@btc-vision/hyper-express';
 import { Config } from './config.js';
-import { lookupApiKey } from './db.js';
+import { lookupApiKey, lookupSession } from './db.js';
 
 type Req = HyperExpress.Request;
 type Res = HyperExpress.Response;
@@ -53,11 +53,25 @@ setInterval(() => {
 
 // ── Public helper ─────────────────────────────────────────────────────────────
 
-/** Returns the authenticated key ID, or null + sends 401 on failure. */
+/**
+ * Returns the authenticated key_id (from api_keys) or user_id (from session).
+ * Accepts either X-Api-Key or X-Session-Token header.
+ */
 export async function verifyApiKey(req: Req, res: Res): Promise<string | null> {
+    // Try session token first
+    const sessionToken = req.headers['x-session-token'] ?? '';
+    if (sessionToken) {
+        const tokenHash = crypto.createHash('sha256').update(sessionToken).digest('hex');
+        const session   = await lookupSession(tokenHash);
+        if (session) return session.user_id;
+        res.status(401).json({ error: 'Invalid or expired session' });
+        return null;
+    }
+
+    // Fall back to API key
     const rawKey = req.headers['x-api-key'] ?? '';
     if (!rawKey) {
-        res.status(401).json({ error: 'x-api-key header required' });
+        res.status(401).json({ error: 'x-api-key or x-session-token required' });
         return null;
     }
     const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');

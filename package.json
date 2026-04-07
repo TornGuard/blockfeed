@@ -15,6 +15,7 @@
     "@btc-vision/hyper-express": "^6.17.4",
     "@btc-vision/transaction": "^1.7.23",
     "@btc-vision/uwebsockets.js": "^20.57.0",
+    "bitcoinjs-message": "^2.2.0",
     "dotenv": "^16.4.5",
     "graphql": "^16.13.1",
     "graphql-http": "^1.22.4",
