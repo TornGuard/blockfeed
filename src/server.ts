@@ -1,7 +1,7 @@
 /**
  * BlockFeed — Bitcoin + OPNet Data API
  *
- * Scaled to Chainlink-level price feeds and Alchemy-level node access.
+ * Real-time Bitcoin + OPNet price feeds and node access infrastructure.
  * Powered by @btc-vision/hyper-express + @btc-vision/uwebsocket.js.
  */
 

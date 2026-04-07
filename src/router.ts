@@ -223,7 +223,7 @@ export function registerRoutes(app: HyperExpress.Server): void {
         res.json({ ok: true, count: rows.length, data: rows });
     });
 
-    // ── Address (Alchemy-style) ───────────────────────────────────────────────
+    // ── Address ───────────────────────────────────────────────────────────────
     app.get('/v1/address/:address', async (req, res) => {
         if (!await auth(req, res)) return;
         incCounter('http_requests_total', { route: '/v1/address/:address' });
@@ -266,7 +266,7 @@ export function registerRoutes(app: HyperExpress.Server): void {
         });
     });
 
-    // ── Oracle (Chainlink-style) ──────────────────────────────────────────────
+    // ── Oracle ────────────────────────────────────────────────────────────────
     app.get('/v1/oracle/all', async (req, res) => {
         if (!await auth(req, res)) return;
         incCounter('http_requests_total', { route: '/v1/oracle/all' });
