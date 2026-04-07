@@ -149,13 +149,20 @@ export async function ensureSchema(): Promise<void> {
             ADD COLUMN IF NOT EXISTS rate_limit INTEGER NOT NULL DEFAULT 100,
             ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
     `);
-    // Rename original 'key' column to 'key_hash' if it still exists
+    // Recreate api_keys with correct schema if it has the old 'key' or 'name' columns
     await pool.query(`
         DO $$ BEGIN
             IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='api_keys' AND column_name='key')
+            OR EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='api_keys' AND column_name='name')
             THEN
-                ALTER TABLE api_keys DROP COLUMN IF EXISTS key_hash;
-                ALTER TABLE api_keys RENAME COLUMN key TO key_hash;
+                DROP TABLE IF EXISTS api_keys CASCADE;
+                CREATE TABLE api_keys (
+                    id          UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
+                    key_hash    TEXT    NOT NULL UNIQUE,
+                    label       TEXT    NOT NULL DEFAULT 'default',
+                    rate_limit  INTEGER NOT NULL DEFAULT 100,
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
             END IF;
         END $$;
         CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys (key_hash);
