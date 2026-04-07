@@ -189,6 +189,7 @@ export async function ensureSchema(): Promise<void> {
             END IF;
         END $$;
         CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys (key_hash);
+        ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS user_id UUID;
     `);
     // Recreate webhooks with correct schema if key_id column is missing
     await pool.query(`
