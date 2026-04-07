@@ -145,9 +145,11 @@ export async function ensureSchema(): Promise<void> {
         ALTER TABLE webhooks
             ADD COLUMN IF NOT EXISTS last_event_id BIGINT NOT NULL DEFAULT 0;
         ALTER TABLE api_keys
-            ADD COLUMN IF NOT EXISTS key_hash TEXT;
+            ADD COLUMN IF NOT EXISTS key_hash   TEXT,
+            ADD COLUMN IF NOT EXISTS label      TEXT NOT NULL DEFAULT 'default',
+            ADD COLUMN IF NOT EXISTS rate_limit INTEGER NOT NULL DEFAULT 100,
+            ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
     `);
-    // key_hash needs a unique index — CREATE UNIQUE INDEX IF NOT EXISTS is safe on existing tables
     await pool.query(`
         CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys (key_hash);
     `);
