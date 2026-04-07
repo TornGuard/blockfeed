@@ -52,42 +52,81 @@ function bip322MessageHash(message: string): Uint8Array {
     return sha256(Buffer.concat([tagHash, tagHash, msgBytes]));
 }
 
+/** Decode a bech32m address (any HRP) → x-only pubkey (32 bytes) or null */
+function decodeBech32mPubkey(address: string): Uint8Array | null {
+    try {
+        const decoded = bech32m.decode(address, 1000);
+        const program = new Uint8Array(bech32m.fromWords(decoded.words.slice(1)));
+        console.log('[taproot] address HRP:', decoded.prefix, 'program len:', program.length, 'bytes:', Buffer.from(program).toString('hex').slice(0, 16) + '...');
+        if (program.length === 32) return program;
+        return null;
+    } catch (e: any) {
+        console.log('[taproot] bech32m decode error:', e.message);
+        return null;
+    }
+}
+
 /**
- * Verify a BIP-322 simple signature for a Taproot (P2TR) address.
- * UniSat encodes the witness as: [01][40][64-byte schnorr sig]
- * The address encodes the x-only pubkey via bech32m.
+ * Try all known Taproot/OPNet signature formats and log which succeeds.
  */
 function verifyTaprootSig(address: string, message: string, sigBase64: string): boolean {
-    try {
-        const sigBuf = Buffer.from(sigBase64, 'base64');
+    const sigBuf = Buffer.from(sigBase64, 'base64');
+    const msgHash = bip322MessageHash(message);
+    const addrPubkey = decodeBech32mPubkey(address);
 
-        // BIP-322 simple witness format: varint(count) + varint(len) + bytes
-        // Minimum: 01 40 <64 bytes> = 66 bytes
-        // Also handle raw 64-byte Schnorr sig (some wallets skip the witness wrapper)
-        let schnorrSig: Uint8Array;
-        if (sigBuf.length === 64) {
-            schnorrSig = sigBuf;
-        } else if (sigBuf.length >= 66 && sigBuf[0] === 0x01 && sigBuf[1] === 0x40) {
-            schnorrSig = sigBuf.slice(2, 66);
-        } else if (sigBuf.length >= 67 && sigBuf[1] === 0x01 && sigBuf[2] === 0x40) {
-            // one extra byte prefix (e.g. 0x00 from some encodings)
-            schnorrSig = sigBuf.slice(3, 67);
-        } else {
+    console.log('[taproot] sig len:', sigBuf.length, 'msgHash:', Buffer.from(msgHash).toString('hex').slice(0, 16) + '...');
+
+    const tryVerify = (label: string, sig: Uint8Array, pub: Uint8Array): boolean => {
+        try {
+            const ok = schnorr.verify(sig, msgHash, pub);
+            console.log(`[taproot] attempt ${label}:`, ok);
+            return ok;
+        } catch (e: any) {
+            console.log(`[taproot] attempt ${label} error:`, e.message);
             return false;
         }
+    };
 
-        // Decode bech32m address → x-only pubkey (32 bytes)
-        const decoded = bech32m.decode(address);
-        const words = decoded.words;
-        // First word is witness version (1 for Taproot), rest is the program
-        const pubkeyBytes = new Uint8Array(bech32m.fromWords(words.slice(1)));
-        if (pubkeyBytes.length !== 32) return false;
-
-        const msgHash = bip322MessageHash(message);
-        return schnorr.verify(schnorrSig, msgHash, pubkeyBytes);
-    } catch {
-        return false;
+    // 1. Raw 64-byte Schnorr sig + pubkey from address
+    if (sigBuf.length === 64 && addrPubkey) {
+        if (tryVerify('raw64+addrPubkey', sigBuf, addrPubkey)) return true;
     }
+
+    // 2. BIP-322 simple [01 40 <64>]
+    if (sigBuf.length >= 66 && sigBuf[0] === 0x01 && sigBuf[1] === 0x40 && addrPubkey) {
+        if (tryVerify('bip322simple', sigBuf.slice(2, 66), addrPubkey)) return true;
+    }
+
+    // 3. [32-byte pubkey][64-byte Schnorr sig] — OPNet custom format
+    if (sigBuf.length === 96) {
+        const pub32 = sigBuf.slice(0, 32);
+        const sig64 = sigBuf.slice(32, 96);
+        if (tryVerify('pub32+sig64', sig64, pub32)) return true;
+
+        // Also try reversed: [64-byte sig][32-byte pubkey]
+        const sig64b = sigBuf.slice(0, 64);
+        const pub32b = sigBuf.slice(64, 96);
+        if (tryVerify('sig64+pub32', sig64b, pub32b)) return true;
+
+        // Try with address pubkey
+        if (addrPubkey) {
+            if (tryVerify('sig64_from32_addrPubkey', sigBuf.slice(32, 96), addrPubkey)) return true;
+            if (tryVerify('sig64_from0_addrPubkey',  sigBuf.slice(0,  64), addrPubkey)) return true;
+        }
+    }
+
+    // 4. Try all 33 possible 64-byte windows (brute force offset) with address pubkey
+    if (addrPubkey && sigBuf.length >= 64) {
+        for (let i = 0; i <= sigBuf.length - 64; i++) {
+            try {
+                const ok = schnorr.verify(sigBuf.slice(i, i + 64), msgHash, addrPubkey);
+                if (ok) { console.log(`[taproot] brute offset=${i} matched!`); return true; }
+            } catch { /* skip */ }
+        }
+        console.log('[taproot] brute force: no offset matched');
+    }
+
+    return false;
 }
 
 /** Verify a Bitcoin message signature — handles BIP-137 (legacy/segwit) and BIP-322 (Taproot) */
