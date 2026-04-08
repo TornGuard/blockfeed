@@ -62,48 +62,42 @@ function mlDsaForLevel(level: number) {
  * Verify an OPNet ML-DSA (post-quantum) signature.
  * sigBase64 = base64(JSON({ type:'mldsa', signature, publicKey, securityLevel }))
  *
- * 1. SHA256(publicKey) == bech32m witness program → proves key owns address
- * 2. ml_dsa.verify(sig, SHA256(message), pubKey)  → proves they signed
+ * NOTE: OPNet addresses are Taproot-style (v1, 32-byte tweaked ECDSA key as witness program),
+ * not SHA256(mldsaPublicKey). Address-to-key binding is enforced at the DB layer instead:
+ * the first sign-in binds SHA256(mldsaPublicKey) to the wallet address permanently.
+ *
+ * Returns the pubkey hash alongside the result so callers can store/enforce it.
  */
-function verifyOPNetSig(address: string, message: string, sigBase64: string): boolean {
+function verifyOPNetSig(
+    address: string, message: string, sigBase64: string,
+): { ok: boolean; pubkeyHash?: string } {
     try {
         const json = JSON.parse(Buffer.from(sigBase64, 'base64').toString('utf-8'));
-        if (json.type !== 'mldsa') return false;
+        if (json.type !== 'mldsa') return { ok: false };
 
-        const pubKeyBytes = Buffer.from(json.publicKey,  'hex');
-        const sigBytes    = Buffer.from(json.signature,  'hex');
+        const pubKeyBytes = Buffer.from(json.publicKey, 'hex');
+        const sigBytes    = Buffer.from(json.signature, 'hex');
         const level       = Number(json.securityLevel) || 44;
 
-        console.log('[opnet] address:', address);
-        console.log('[opnet] level:', level, 'pubLen:', pubKeyBytes.length, 'sigLen:', sigBytes.length);
+        console.log('[opnet] address:', address, 'level:', level, 'pubLen:', pubKeyBytes.length, 'sigLen:', sigBytes.length);
 
-        // 1. Verify publicKey hashes to the address witness program
-        const addrProgram = decodeBech32mProgram(address);
-        if (!addrProgram) { console.log('[opnet] bad address — decodeBech32mProgram returned null'); return false; }
-
-        const pubKeyHash  = sha256(pubKeyBytes);
-        console.log('[opnet] addrProgram (hex):', Buffer.from(addrProgram).toString('hex'));
-        console.log('[opnet] sha256(pubKey) (hex):', Buffer.from(pubKeyHash).toString('hex'));
-        const hashMatches = Buffer.from(pubKeyHash).equals(Buffer.from(addrProgram));
-        console.log('[opnet] hashMatches:', hashMatches);
-        if (!hashMatches) return false;
-
-        // 2. Verify ML-DSA signature — message is already SHA256'd by client before wallet signs
         const msgHash = sha256(Buffer.from(message, 'utf-8'));
-        console.log('[opnet] message:', message);
-        console.log('[opnet] sha256(message) (hex):', Buffer.from(msgHash).toString('hex'));
         const dsa = mlDsaForLevel(level);
         const ok = dsa.verify(sigBytes, msgHash, pubKeyBytes);
         console.log('[opnet] ml_dsa verify:', ok);
-        return ok;
+
+        const pubkeyHash = Buffer.from(sha256(pubKeyBytes)).toString('hex');
+        return { ok, pubkeyHash };
     } catch (e: any) {
         console.log('[opnet] error:', e.message);
-        return false;
+        return { ok: false };
     }
 }
 
 /** Verify a Bitcoin message signature — handles BIP-137, BIP-322, and OPNet ML-DSA */
-function verifyBitcoinSig(address: string, nonce: string, signature: string): boolean {
+function verifyBitcoinSig(
+    address: string, nonce: string, signature: string,
+): { ok: boolean; pubkeyHash?: string } {
     const message = buildSignMessage(nonce);
     const isOPNet   = /^(op1|opt1|opr1)/i.test(address);  // OPNet addresses (mainnet/testnet/regtest)
     const isTaproot = /^(bc1p|tb1p)/i.test(address);
@@ -117,20 +111,20 @@ function verifyBitcoinSig(address: string, nonce: string, signature: string): bo
         try {
             const sigBuf = Buffer.from(signature, 'base64');
             const program = decodeBech32mProgram(address);
-            if (!program || sigBuf.length !== 64) return false;
+            if (!program || sigBuf.length !== 64) return { ok: false };
             const msgHash = sha256(Buffer.from(message, 'utf-8'));
-            return schnorr.verify(sigBuf, msgHash, program);
-        } catch { return false; }
+            return { ok: schnorr.verify(sigBuf, msgHash, program) };
+        } catch { return { ok: false }; }
     }
 
     // BIP-137 ECDSA for legacy / P2SH / P2WPKH
     try {
-        return bitcoinMessage.verify(message, address, signature, undefined, true);
+        return { ok: bitcoinMessage.verify(message, address, signature, undefined, true) };
     } catch {
         try {
-            return bitcoinMessage.verify(message, address, signature);
+            return { ok: bitcoinMessage.verify(message, address, signature) };
         } catch {
-            return false;
+            return { ok: false };
         }
     }
 }
@@ -175,7 +169,7 @@ export function registerAuthRoutes(app: HyperExpress.Server): void {
             }
 
             // Verify signature first (before consuming nonce to avoid timing attacks)
-            const valid = verifyBitcoinSig(wallet, nonce, signature);
+            const { ok: valid, pubkeyHash } = verifyBitcoinSig(wallet, nonce, signature);
             if (!valid) {
                 res.status(401).json({ error: 'Invalid signature' });
                 return;
@@ -188,8 +182,14 @@ export function registerAuthRoutes(app: HyperExpress.Server): void {
                 return;
             }
 
-            // Upsert user
-            const user = await upsertUser(wallet);
+            // Upsert user — first OPNet login binds the ML-DSA pubkey hash to the address
+            const user = await upsertUser(wallet, pubkeyHash);
+
+            // Enforce pubkey binding: if a different key was previously registered, reject
+            if (pubkeyHash && user.mldsa_pubkey_hash && user.mldsa_pubkey_hash !== pubkeyHash) {
+                res.status(401).json({ error: 'Public key mismatch for this wallet' });
+                return;
+            }
 
             // Get or create API key for this user
             const { rawKey } = await getOrCreateUserApiKey(user.id, wallet);

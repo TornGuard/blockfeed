@@ -118,10 +118,12 @@ export async function ensureSchema(): Promise<void> {
         );
 
         CREATE TABLE IF NOT EXISTS users (
-            id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-            wallet_address TEXT        NOT NULL UNIQUE,
-            created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            id                 UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            wallet_address     TEXT        NOT NULL UNIQUE,
+            mldsa_pubkey_hash  TEXT,
+            created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS mldsa_pubkey_hash TEXT;
 
         CREATE TABLE IF NOT EXISTS auth_nonces (
             wallet_address TEXT        PRIMARY KEY,
@@ -823,12 +825,23 @@ export async function consumeNonce(walletAddress: string, nonce: string): Promis
     return (r.rowCount ?? 0) > 0;
 }
 
-export async function upsertUser(walletAddress: string): Promise<{ id: string; wallet_address: string; created_at: Date }> {
-    const r = await pool.query<{ id: string; wallet_address: string; created_at: Date }>(
-        `INSERT INTO users (wallet_address) VALUES ($1)
-         ON CONFLICT (wallet_address) DO UPDATE SET wallet_address = EXCLUDED.wallet_address
+/**
+ * Upsert user. On first OPNet login, binds mldsaPubkeyHash to the address.
+ * Returns the stored hash so callers can enforce consistency.
+ */
+export async function upsertUser(
+    walletAddress: string,
+    mldsaPubkeyHash?: string,
+): Promise<{ id: string; wallet_address: string; mldsa_pubkey_hash: string | null; created_at: Date }> {
+    const r = await pool.query<{ id: string; wallet_address: string; mldsa_pubkey_hash: string | null; created_at: Date }>(
+        `INSERT INTO users (wallet_address, mldsa_pubkey_hash) VALUES ($1, $2)
+         ON CONFLICT (wallet_address) DO UPDATE SET
+           mldsa_pubkey_hash = CASE
+             WHEN users.mldsa_pubkey_hash IS NULL THEN EXCLUDED.mldsa_pubkey_hash
+             ELSE users.mldsa_pubkey_hash
+           END
          RETURNING *`,
-        [walletAddress],
+        [walletAddress, mldsaPubkeyHash ?? null],
     );
     return r.rows[0]!;
 }
