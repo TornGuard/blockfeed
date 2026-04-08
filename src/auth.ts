@@ -19,6 +19,7 @@ import bitcoinMessage from 'bitcoinjs-message';
 import { schnorr } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha256';
 import { bech32m } from 'bech32';
+import { ml_dsa44, ml_dsa65, ml_dsa87 } from '@btc-vision/post-quantum/ml-dsa.js';
 import {
     upsertNonce, consumeNonce, upsertUser,
     createSession, lookupSession, deleteSession,
@@ -41,52 +42,85 @@ function generateToken(): string {
 }
 
 
-/** Decode a bech32m address (any HRP) → x-only pubkey (32 bytes) or null */
-function decodeBech32mPubkey(address: string): Uint8Array | null {
+/** Decode a bech32m address (any HRP) → 32-byte witness program or null */
+function decodeBech32mProgram(address: string): Uint8Array | null {
     try {
         const decoded = bech32m.decode(address, 1000);
         const program = new Uint8Array(bech32m.fromWords(decoded.words.slice(1)));
-        if (program.length === 32) return program;
-        return null;
+        return program.length === 32 ? program : null;
     } catch { return null; }
 }
 
+/** Pick ML-DSA variant by securityLevel number (44, 65, 87) */
+function mlDsaForLevel(level: number) {
+    if (level === 65) return ml_dsa65;
+    if (level === 87) return ml_dsa87;
+    return ml_dsa44; // default LEVEL2 = 44
+}
+
 /**
- * Verify an OPNet/Taproot Schnorr signature.
- * OPNet uses: sig = schnorr.sign(SHA256(message), privateKey) → 64 bytes → base64
- * Verification: schnorr.verify(sig, SHA256(message), xonly_pubkey_from_address)
+ * Verify an OPNet ML-DSA (post-quantum) signature.
+ * sigBase64 = base64(JSON({ type:'mldsa', signature, publicKey, securityLevel }))
+ *
+ * 1. SHA256(publicKey) == bech32m witness program → proves key owns address
+ * 2. ml_dsa.verify(sig, SHA256(message), pubKey)  → proves they signed
  */
-function verifyTaprootSig(address: string, message: string, sigBase64: string): boolean {
+function verifyOPNetSig(address: string, message: string, sigBase64: string): boolean {
     try {
-        const sigBuf = Buffer.from(sigBase64, 'base64');
-        const addrPubkey = decodeBech32mPubkey(address);
-        if (!addrPubkey) { console.log('[taproot] bad address'); return false; }
+        const json = JSON.parse(Buffer.from(sigBase64, 'base64').toString('utf-8'));
+        if (json.type !== 'mldsa') return false;
 
-        const msgBytes = Buffer.from(message, 'utf-8');
-        const msgHash = sha256(msgBytes);
+        const pubKeyBytes = Buffer.from(json.publicKey,  'hex');
+        const sigBytes    = Buffer.from(json.signature,  'hex');
+        const level       = Number(json.securityLevel) || 44;
 
-        console.log('[taproot] sig(64):', sigBuf.toString('hex'));
-        console.log('[taproot] msgHash:', Buffer.from(msgHash).toString('hex'));
-        console.log('[taproot] pubkey:', Buffer.from(addrPubkey).toString('hex'));
+        console.log('[opnet] address:', address);
+        console.log('[opnet] level:', level, 'pubLen:', pubKeyBytes.length, 'sigLen:', sigBytes.length);
 
-        if (sigBuf.length !== 64) { console.log('[taproot] bad sig len:', sigBuf.length); return false; }
+        // 1. Verify publicKey hashes to the address witness program
+        const addrProgram = decodeBech32mProgram(address);
+        if (!addrProgram) { console.log('[opnet] bad address — decodeBech32mProgram returned null'); return false; }
 
-        const ok = schnorr.verify(sigBuf, msgHash, addrPubkey);
-        console.log('[taproot] verify result:', ok);
+        const pubKeyHash  = sha256(pubKeyBytes);
+        console.log('[opnet] addrProgram (hex):', Buffer.from(addrProgram).toString('hex'));
+        console.log('[opnet] sha256(pubKey) (hex):', Buffer.from(pubKeyHash).toString('hex'));
+        const hashMatches = Buffer.from(pubKeyHash).equals(Buffer.from(addrProgram));
+        console.log('[opnet] hashMatches:', hashMatches);
+        if (!hashMatches) return false;
+
+        // 2. Verify ML-DSA signature — message is already SHA256'd by client before wallet signs
+        const msgHash = sha256(Buffer.from(message, 'utf-8'));
+        console.log('[opnet] message:', message);
+        console.log('[opnet] sha256(message) (hex):', Buffer.from(msgHash).toString('hex'));
+        const dsa = mlDsaForLevel(level);
+        const ok = dsa.verify(sigBytes, msgHash, pubKeyBytes);
+        console.log('[opnet] ml_dsa verify:', ok);
         return ok;
     } catch (e: any) {
-        console.log('[taproot] error:', e.message);
+        console.log('[opnet] error:', e.message);
         return false;
     }
 }
 
-/** Verify a Bitcoin message signature — handles BIP-137 (legacy/segwit) and BIP-322 (Taproot) */
+/** Verify a Bitcoin message signature — handles BIP-137, BIP-322, and OPNet ML-DSA */
 function verifyBitcoinSig(address: string, nonce: string, signature: string): boolean {
     const message = buildSignMessage(nonce);
-    const isTaproot = /^(bc1p|tb1p|opt1)/i.test(address);
+    const isOPNet   = /^(op1|opt1|opr1)/i.test(address);  // OPNet addresses (mainnet/testnet/regtest)
+    const isTaproot = /^(bc1p|tb1p)/i.test(address);
+
+    if (isOPNet) {
+        return verifyOPNetSig(address, message, signature);
+    }
 
     if (isTaproot) {
-        return verifyTaprootSig(address, message, signature);
+        // BIP-322 simple for standard Bitcoin Taproot
+        try {
+            const sigBuf = Buffer.from(signature, 'base64');
+            const program = decodeBech32mProgram(address);
+            if (!program || sigBuf.length !== 64) return false;
+            const msgHash = sha256(Buffer.from(message, 'utf-8'));
+            return schnorr.verify(sigBuf, msgHash, program);
+        } catch { return false; }
     }
 
     // BIP-137 ECDSA for legacy / P2SH / P2WPKH
