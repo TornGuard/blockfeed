@@ -59,20 +59,18 @@ function decodeBech32mPubkey(address: string): Uint8Array | null {
 function verifyTaprootSig(address: string, message: string, sigBase64: string): boolean {
     try {
         const sigBuf = Buffer.from(sigBase64, 'base64');
-        console.log('[taproot] sig len:', sigBuf.length, 'hex:', sigBuf.slice(0, 8).toString('hex'));
-        if (sigBuf.length !== 64) {
-            console.log('[taproot] unexpected sig length:', sigBuf.length, '(expected 64)');
-            return false;
-        }
-
         const addrPubkey = decodeBech32mPubkey(address);
-        if (!addrPubkey) {
-            console.log('[taproot] could not decode address pubkey');
-            return false;
-        }
+        if (!addrPubkey) { console.log('[taproot] bad address'); return false; }
 
-        // OPNet MessageSigner: hash = SHA256(message_bytes), then BIP-340 Schnorr
-        const msgHash = sha256(Buffer.from(message, 'utf-8'));
+        const msgBytes = Buffer.from(message, 'utf-8');
+        const msgHash = sha256(msgBytes);
+
+        console.log('[taproot] sig(64):', sigBuf.toString('hex'));
+        console.log('[taproot] msgHash:', Buffer.from(msgHash).toString('hex'));
+        console.log('[taproot] pubkey:', Buffer.from(addrPubkey).toString('hex'));
+
+        if (sigBuf.length !== 64) { console.log('[taproot] bad sig len:', sigBuf.length); return false; }
+
         const ok = schnorr.verify(sigBuf, msgHash, addrPubkey);
         console.log('[taproot] verify result:', ok);
         return ok;
