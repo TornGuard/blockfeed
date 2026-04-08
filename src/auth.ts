@@ -16,7 +16,7 @@
 import crypto from 'crypto';
 import HyperExpress from '@btc-vision/hyper-express';
 import bitcoinMessage from 'bitcoinjs-message';
-import { schnorr, secp256k1 } from '@noble/curves/secp256k1';
+import { schnorr } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha256';
 import { bech32m } from 'bech32';
 import {
@@ -40,35 +40,6 @@ function generateToken(): string {
     return crypto.randomBytes(32).toString('hex');
 }
 
-/** BIP-340 tagged hash: SHA256(SHA256(tag) || SHA256(tag) || msg) */
-function taggedHash(tag: string, msg: Uint8Array): Uint8Array {
-    const tagBytes = Buffer.from(tag, 'utf8');
-    const tagHash = sha256(tagBytes);
-    return sha256(Buffer.concat([tagHash, tagHash, msg]));
-}
-
-/** BIP-137 / Bitcoin message magic hash: SHA256d("\x18Bitcoin Signed Message:\n" + varint(len) + msg) */
-function bitcoinMagicHash(message: string): Uint8Array {
-    const msgBytes = Buffer.from(message, 'utf8');
-    const prefix = Buffer.from('\x18Bitcoin Signed Message:\n', 'utf8');
-    // varint for message length
-    const len = msgBytes.length;
-    const lenBuf = len < 253 ? Buffer.from([len]) : Buffer.concat([Buffer.from([0xfd]), Buffer.from([len & 0xff, (len >> 8) & 0xff])]);
-    const payload = Buffer.concat([prefix, lenBuf, msgBytes]);
-    return sha256(sha256(payload));
-}
-
-/** All message hash candidates to try */
-function allMessageHashes(message: string): Array<{ label: string; hash: Uint8Array }> {
-    const msgBytes = Buffer.from(message, 'utf8');
-    return [
-        { label: 'bip322-tagged',   hash: taggedHash('BIP0322-signed-message', msgBytes) },
-        { label: 'bitcoin-magic',   hash: bitcoinMagicHash(message) },
-        { label: 'sha256',          hash: sha256(msgBytes) },
-        { label: 'sha256d',         hash: sha256(sha256(msgBytes)) },
-        { label: 'tagged-challenge',hash: taggedHash('BIP0322-signed-message\n', msgBytes) },
-    ];
-}
 
 /** Decode a bech32m address (any HRP) → x-only pubkey (32 bytes) or null */
 function decodeBech32mPubkey(address: string): Uint8Array | null {
@@ -80,66 +51,34 @@ function decodeBech32mPubkey(address: string): Uint8Array | null {
     } catch { return null; }
 }
 
-/** Try all known Taproot/OPNet signature formats × all known message hashes */
+/**
+ * Verify an OPNet/Taproot Schnorr signature.
+ * OPNet uses: sig = schnorr.sign(SHA256(message), privateKey) → 64 bytes → base64
+ * Verification: schnorr.verify(sig, SHA256(message), xonly_pubkey_from_address)
+ */
 function verifyTaprootSig(address: string, message: string, sigBase64: string): boolean {
-    const sigBuf = Buffer.from(sigBase64, 'base64');
-    const addrPubkey = decodeBech32mPubkey(address);
-    const hashes = allMessageHashes(message);
-
-    console.log('[taproot] addrPubkey:', addrPubkey ? Buffer.from(addrPubkey).toString('hex').slice(0, 16) + '...' : 'null');
-    console.log('[taproot] sig len:', sigBuf.length, 'hex:', sigBuf.toString('hex').slice(0, 32) + '...');
-
-    // Candidate [sig, pubkey] pairs to try
-    const candidates: Array<{ sig: Uint8Array; pub: Uint8Array; label: string }> = [];
-
-    if (addrPubkey) {
-        // Try every 64-byte window with the address pubkey
-        for (let i = 0; i <= sigBuf.length - 64; i++) {
-            candidates.push({ sig: sigBuf.slice(i, i + 64), pub: addrPubkey, label: `offset${i}+addrPub` });
+    try {
+        const sigBuf = Buffer.from(sigBase64, 'base64');
+        if (sigBuf.length !== 64) {
+            console.log('[taproot] unexpected sig length:', sigBuf.length, '(expected 64)');
+            return false;
         }
-    }
 
-    // If 96 bytes: try [pub32][sig64] and [sig64][pub32]
-    if (sigBuf.length === 96) {
-        candidates.push({ sig: sigBuf.slice(32, 96), pub: sigBuf.slice(0, 32),  label: 'pub32+sig64' });
-        candidates.push({ sig: sigBuf.slice(0,  64), pub: sigBuf.slice(64, 96), label: 'sig64+pub32' });
-    }
-
-    for (const { sig, pub, label } of candidates) {
-        for (const { label: hashLabel, hash } of hashes) {
-            try {
-                if (schnorr.verify(sig, hash, pub)) {
-                    console.log(`[taproot] MATCH: sig=${label} hash=${hashLabel}`);
-                    return true;
-                }
-            } catch { /* skip */ }
+        const addrPubkey = decodeBech32mPubkey(address);
+        if (!addrPubkey) {
+            console.log('[taproot] could not decode address pubkey');
+            return false;
         }
+
+        // OPNet MessageSigner: hash = SHA256(message_bytes), then BIP-340 Schnorr
+        const msgHash = sha256(Buffer.from(message, 'utf-8'));
+        const ok = schnorr.verify(sigBuf, msgHash, addrPubkey);
+        console.log('[taproot] verify result:', ok);
+        return ok;
+    } catch (e: any) {
+        console.log('[taproot] error:', e.message);
+        return false;
     }
-
-    console.log('[taproot] no combination matched');
-
-    // Last resort: try ECDSA recovery for all hash types
-    if (sigBuf.length >= 65) {
-        for (const { label: hashLabel, hash } of hashes) {
-            for (let recId = 0; recId < 4; recId++) {
-                try {
-                    // Try treating first 64 bytes as compact r,s
-                    const r = BigInt('0x' + sigBuf.slice(0, 32).toString('hex'));
-                    const s = BigInt('0x' + sigBuf.slice(32, 64).toString('hex'));
-                    const sig = new secp256k1.Signature(r, s);
-                    const recovered = sig.addRecoveryBit(recId).recoverPublicKey(hash);
-                    const xonly = recovered.toRawBytes(true).slice(1); // x-only
-                    if (addrPubkey && Buffer.from(xonly).equals(Buffer.from(addrPubkey))) {
-                        console.log(`[taproot] ECDSA MATCH: hash=${hashLabel} recId=${recId}`);
-                        return true;
-                    }
-                } catch { /* skip */ }
-            }
-        }
-        console.log('[taproot] ECDSA recovery: no match');
-    }
-
-    return false;
 }
 
 /** Verify a Bitcoin message signature — handles BIP-137 (legacy/segwit) and BIP-322 (Taproot) */
@@ -203,19 +142,7 @@ export function registerAuthRoutes(app: HyperExpress.Server): void {
             }
 
             // Verify signature first (before consuming nonce to avoid timing attacks)
-            const message = buildSignMessage(nonce);
-            const sigBuf = Buffer.from(signature, 'base64');
-            const isTaproot = /^(bc1p|tb1p|opt1)/i.test(wallet);
-            console.log('[auth/verify] wallet:', wallet);
-            console.log('[auth/verify] isTaproot:', isTaproot);
-            console.log('[auth/verify] message:', JSON.stringify(message));
-            console.log('[auth/verify] sig base64 len:', signature.length, 'buf len:', sigBuf.length);
-            console.log('[auth/verify] sig first bytes:', sigBuf.slice(0, 8).toString('hex'));
-            let bip137Result = false;
-            try { bip137Result = bitcoinMessage.verify(message, wallet, signature, undefined, true); } catch (e: any) { console.log('[auth/verify] bip137 error:', e.message); }
-            console.log('[auth/verify] bip137 result:', bip137Result);
             const valid = verifyBitcoinSig(wallet, nonce, signature);
-            console.log('[auth/verify] final result:', valid);
             if (!valid) {
                 res.status(401).json({ error: 'Invalid signature' });
                 return;
