@@ -59,6 +59,7 @@ function decodeBech32mPubkey(address: string): Uint8Array | null {
 function verifyTaprootSig(address: string, message: string, sigBase64: string): boolean {
     try {
         const sigBuf = Buffer.from(sigBase64, 'base64');
+        console.log('[taproot] sig len:', sigBuf.length, 'hex:', sigBuf.slice(0, 8).toString('hex'));
         if (sigBuf.length !== 64) {
             console.log('[taproot] unexpected sig length:', sigBuf.length, '(expected 64)');
             return false;
