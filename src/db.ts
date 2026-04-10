@@ -141,6 +141,17 @@ export async function ensureSchema(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions (token_hash);
         CREATE INDEX IF NOT EXISTS idx_sessions_user  ON sessions (user_id);
 
+        CREATE TABLE IF NOT EXISTS device_tokens (
+            id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            user_id      UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash   TEXT        NOT NULL UNIQUE,
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_used_at TIMESTAMPTZ,
+            expires_at   TIMESTAMPTZ NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_device_tokens_hash   ON device_tokens (token_hash);
+        CREATE INDEX IF NOT EXISTS idx_device_tokens_user   ON device_tokens (user_id);
+
         CREATE TABLE IF NOT EXISTS bets (
             bet_id            INTEGER PRIMARY KEY,
             bet_type          SMALLINT,
@@ -872,6 +883,34 @@ export async function lookupSession(tokenHash: string): Promise<{ user_id: strin
 
 export async function deleteSession(tokenHash: string): Promise<void> {
     await pool.query(`DELETE FROM sessions WHERE token_hash = $1`, [tokenHash]);
+}
+
+export async function createDeviceToken(userId: string, tokenHash: string): Promise<void> {
+    await pool.query(
+        `INSERT INTO device_tokens (user_id, token_hash, expires_at)
+         VALUES ($1, $2, NOW() + INTERVAL '90 days')
+         ON CONFLICT (token_hash) DO NOTHING`,
+        [userId, tokenHash],
+    );
+}
+
+export async function lookupDeviceToken(tokenHash: string): Promise<{ user_id: string; wallet_address: string; api_key_hash: string | null } | null> {
+    const r = await pool.query<{ user_id: string; wallet_address: string; api_key_hash: string | null }>(
+        `UPDATE device_tokens dt
+         SET last_used_at = NOW(), expires_at = NOW() + INTERVAL '90 days'
+         FROM users u
+         LEFT JOIN api_keys k ON k.user_id = u.id
+         WHERE dt.token_hash = $1
+           AND dt.expires_at > NOW()
+           AND u.id = dt.user_id
+         RETURNING dt.user_id, u.wallet_address, k.key_hash AS api_key_hash`,
+        [tokenHash],
+    );
+    return r.rows[0] ?? null;
+}
+
+export async function deleteDeviceToken(tokenHash: string): Promise<void> {
+    await pool.query(`DELETE FROM device_tokens WHERE token_hash = $1`, [tokenHash]);
 }
 
 export async function getOrCreateUserApiKey(userId: string, walletAddress: string): Promise<{ rawKey: string; keyHash: string }> {

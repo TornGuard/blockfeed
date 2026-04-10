@@ -24,6 +24,7 @@ import {
     upsertNonce, consumeNonce, upsertUser,
     createSession, lookupSession, deleteSession,
     getOrCreateUserApiKey,
+    createDeviceToken, lookupDeviceToken, deleteDeviceToken,
 } from './db.js';
 
 type Req = HyperExpress.Request;
@@ -195,13 +196,18 @@ export function registerAuthRoutes(app: HyperExpress.Server): void {
             // Get or create API key for this user
             const { rawKey } = await getOrCreateUserApiKey(user.id, wallet);
 
-            // Create session
-            const rawToken = generateToken();
-            await createSession(user.id, tokenHash(rawToken));
+            // Create session + device token
+            const rawToken  = generateToken();
+            const rawDevice = generateToken();
+            await Promise.all([
+                createSession(user.id, tokenHash(rawToken)),
+                createDeviceToken(user.id, tokenHash(rawDevice)),
+            ]);
 
             res.json({
                 ok: true,
                 token: rawToken,
+                deviceToken: rawDevice,
                 // Only send rawKey on first creation (empty string means key already existed)
                 apiKey: rawKey || null,
                 wallet: user.wallet_address,
@@ -232,11 +238,41 @@ export function registerAuthRoutes(app: HyperExpress.Server): void {
         }
     });
 
+    // ── POST /v1/auth/device-login ────────────────────────────────────────────
+    // Skip signing — exchange a stored device token for a new session
+    app.post('/v1/auth/device-login', async (req: Req, res: Res) => {
+        try {
+            const body = await req.json() as { wallet?: string; deviceToken?: string };
+            const { wallet, deviceToken: rawDevice } = body;
+            if (!wallet || !rawDevice) {
+                res.status(400).json({ error: 'wallet and deviceToken required' });
+                return;
+            }
+
+            const record = await lookupDeviceToken(tokenHash(rawDevice));
+            if (!record || record.wallet_address !== wallet) {
+                res.status(401).json({ error: 'Invalid or expired device token' });
+                return;
+            }
+
+            const rawToken = generateToken();
+            await createSession(record.user_id, tokenHash(rawToken));
+
+            res.json({ ok: true, token: rawToken, wallet });
+        } catch (err) {
+            console.error('[auth/device-login]', (err as Error).message);
+            res.status(500).json({ error: 'Internal error' });
+        }
+    });
+
     // ── POST /v1/auth/logout ───────────────────────────────────────────────────
     app.post('/v1/auth/logout', async (req: Req, res: Res) => {
         try {
+            const body = await req.json().catch(() => ({})) as { deviceToken?: string };
             const raw = req.headers['x-session-token'] ?? '';
             if (raw) await deleteSession(tokenHash(raw));
+            // Optionally revoke device token too (only if client passes it)
+            if (body.deviceToken) await deleteDeviceToken(tokenHash(body.deviceToken));
             res.json({ ok: true });
         } catch {
             res.json({ ok: true }); // Always succeed
