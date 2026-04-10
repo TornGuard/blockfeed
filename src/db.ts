@@ -913,6 +913,24 @@ export async function deleteDeviceToken(tokenHash: string): Promise<void> {
     await pool.query(`DELETE FROM device_tokens WHERE token_hash = $1`, [tokenHash]);
 }
 
+export async function getUserApiKeyMeta(userId: string): Promise<{ id: string; label: string; rate_limit: number; created_at: Date } | null> {
+    const r = await pool.query<{ id: string; label: string; rate_limit: number; created_at: Date }>(
+        `SELECT id, label, rate_limit, created_at FROM api_keys WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1`,
+        [userId],
+    );
+    return r.rows[0] ?? null;
+}
+
+export async function regenerateUserApiKey(userId: string, walletAddress: string): Promise<{ rawKey: string }> {
+    const crypto = await import('crypto');
+    const rawKey  = crypto.randomBytes(32).toString('hex');
+    const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+    // Delete old key(s) for this user, create fresh one
+    await pool.query(`DELETE FROM api_keys WHERE user_id = $1`, [userId]);
+    await createApiKey(keyHash, `wallet:${walletAddress.slice(0, 12)}`, 1000, userId);
+    return { rawKey };
+}
+
 export async function getOrCreateUserApiKey(userId: string, walletAddress: string): Promise<{ rawKey: string; keyHash: string }> {
     // Return existing key if present
     const existing = await pool.query<{ key_hash: string }>(

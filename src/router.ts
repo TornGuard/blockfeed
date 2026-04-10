@@ -15,6 +15,7 @@ import {
     getLatestOraclePrice, getOraclePriceHistory, getAllLatestOraclePrices,
     getBetStats,
     createApiKey, listApiKeys,
+    getUserApiKeyMeta, regenerateUserApiKey,
     createWebhook, listWebhooks, deleteWebhook, toggleWebhook, countWebhooks,
     getAddressOverview, getAddressTxs, getAddressTokenActivity,
     getTxByHash, getTokenHolders, getOhlcv,
@@ -25,6 +26,7 @@ import { getConnectedClients } from './feed.js';
 import { handleMetrics, incCounter } from './metrics.js';
 import { handleRpcProxy } from './rpc-proxy.js';
 import { verifyApiKey, isAdminRequest, rateLimitCheck } from './middleware.js';
+import { resolveSession } from './auth.js';
 import { handleGraphQL } from './graphql.js';
 
 type Req  = HyperExpress.Request;
@@ -449,6 +451,53 @@ export function registerRoutes(app: HyperExpress.Server): void {
         } catch (err) {
             console.error('[/v1/keys] Error:', (err as Error).message);
             res.status(500).json({ error: 'Failed to create key', detail: (err as Error).message });
+        }
+    });
+
+    // ── User profile ──────────────────────────────────────────────────────────
+    // GET /v1/user/profile — returns wallet, API key metadata, and webhooks
+    app.get('/v1/user/profile', async (req, res) => {
+        try {
+            const userId = await resolveSession(req, res);
+            if (!userId) { res.status(401).json({ error: 'x-session-token required' }); return; }
+
+            const [apiKey, webhooks] = await Promise.all([
+                getUserApiKeyMeta(userId),
+                listWebhooks(userId),
+            ]);
+
+            res.json({
+                ok: true,
+                apiKey: apiKey ? {
+                    id:         apiKey.id,
+                    label:      apiKey.label,
+                    rateLimit:  apiKey.rate_limit,
+                    createdAt:  apiKey.created_at,
+                } : null,
+                webhooks,
+            });
+        } catch (err) {
+            console.error('[GET /v1/user/profile]', (err as Error).message);
+            res.status(500).json({ error: 'Internal server error' });
+        }
+    });
+
+    // POST /v1/user/apikey/regenerate — revoke old key, issue new one
+    app.post('/v1/user/apikey/regenerate', async (req, res) => {
+        try {
+            const userId = await resolveSession(req, res);
+            if (!userId) { res.status(401).json({ error: 'x-session-token required' }); return; }
+
+            const session = await import('./db.js').then(db =>
+                db.lookupSession(crypto.createHash('sha256').update(req.headers['x-session-token'] ?? '').digest('hex'))
+            );
+            const wallet = session?.wallet_address ?? '';
+            const { rawKey } = await regenerateUserApiKey(userId, wallet);
+
+            res.json({ ok: true, apiKey: rawKey });
+        } catch (err) {
+            console.error('[POST /v1/user/apikey/regenerate]', (err as Error).message);
+            res.status(500).json({ error: 'Internal server error' });
         }
     });
 
