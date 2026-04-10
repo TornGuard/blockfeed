@@ -82,6 +82,7 @@ function verifyOPNetSig(
         console.log('[opnet] address:', address, 'level:', level, 'pubLen:', pubKeyBytes.length, 'sigLen:', sigBytes.length);
 
         const msgHash = sha256(Buffer.from(message, 'utf-8'));
+        console.log('[opnet] msgHash (sha256 of message):', Buffer.from(msgHash).toString('hex'));
         const dsa = mlDsaForLevel(level);
         const ok = dsa.verify(sigBytes, msgHash, pubKeyBytes);
         console.log('[opnet] ml_dsa verify:', ok);
