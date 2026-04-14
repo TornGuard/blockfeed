@@ -16,7 +16,7 @@ import { fetchAndStoreTokenMetadata } from '../src/token-fetcher.js';
 import type { WorkerMsg } from '../src/types.js';
 
 const POLL_INTERVAL_MS = 15_000;
-const OPNET_RPC = process.env['OPNET_RPC_URL'] ?? 'https://testnet.opnet.org';
+const OPNET_RPC = (process.env['OPNET_RPC_URL'] ?? 'https://mainnet.opnet.org/api/v1/json-rpc').replace(/\/api\/v1\/json-rpc$/, '');
 
 function log(level: 'info' | 'warn' | 'error', message: string): void {
     const msg: WorkerMsg = { type: 'log', level, message };
@@ -25,14 +25,15 @@ function log(level: 'info' | 'warn' | 'error', message: string): void {
 
 async function fetchLatestBlock(): Promise<number | null> {
     try {
-        const res = await fetch(`${OPNET_RPC}/api/v1/block/latest`, {
+        const res = await fetch(`${OPNET_RPC}/api/v1/json-rpc`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', method: 'btc_blockNumber', params: [], id: 1 }),
             signal: AbortSignal.timeout(10_000),
         });
         if (!res.ok) return null;
-        const json = await res.json();
-        // API returns a hex string like "0x2fd1"
-        if (typeof json === 'string') return parseInt(json, 16);
-        if (typeof json === 'object' && json !== null && 'height' in json) return Number((json as { height: unknown }).height);
+        const json = await res.json() as { result?: string };
+        if (typeof json.result === 'string') return parseInt(json.result, 16);
         return null;
     } catch {
         return null;

@@ -19,6 +19,6 @@ export const Config: BlockFeedConfig = {
     databaseUrl:      process.env['DATABASE_URL'] ?? '',
     adminKey:         process.env['ADMIN_KEY'] ?? '',
     oraclePrivateKey: process.env['ORACLE_PRIVATE_KEY'] ?? '',
-    opnetRpcUrl:      process.env['OPNET_RPC_URL'] ?? 'https://testnet.opnet.org/api/v1/json-rpc',
+    opnetRpcUrl:      process.env['OPNET_RPC_URL'] ?? 'https://mainnet.opnet.org/api/v1/json-rpc',
     devMode:          process.env['NODE_ENV'] === 'development',
 };
