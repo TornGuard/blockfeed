@@ -86,7 +86,7 @@ export async function verifyApiKey(req: Req, res: Res): Promise<string | null> {
 /** Rate limit gate. Returns true if request should proceed. */
 export async function rateLimitCheck(req: Req, res: Res): Promise<boolean> {
     const rawKey = req.headers['x-api-key'] ?? '';
-    let rateLimit = 120;
+    let rateLimit = 600;
     let bucketId  = `ip:${req.ip}`;
 
     if (rawKey) {
