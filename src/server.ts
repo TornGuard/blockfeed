@@ -44,7 +44,7 @@ app.set_error_handler((_req, res, err) => {
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin',  '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, PATCH, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key, X-Admin-Key');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, X-Api-Key, X-Admin-Key, X-Session-Token');
     incCounter('http_requests_total', { route: req.path });
 
     if (req.method === 'OPTIONS') {
